@@ -15,8 +15,17 @@
 from types import SimpleNamespace  # Or use a mock object library
 
 import pytest
+import torch
+import transformers.utils as transformers_utils
+from transformers import modeling_utils
+from transformers import AutoModelForCausalLM
 
-from verl.utils.model import update_model_config
+from verl.models.transformers.openpangu_vl import (
+    apply_openpangu_config_compat,
+    apply_openpangu_transformers_compat,
+    normalize_openpangu_position_ids,
+)
+from verl.utils.model import get_hf_auto_model_class, update_model_config
 
 
 # Parametrize with different override scenarios
@@ -50,3 +59,45 @@ def test_update_model_config(override_kwargs):
         assert mock_config.nested_params.sub_param_x == "original_x", "Nested sub_param_x should be unchanged"
         assert mock_config.nested_params.sub_param_y == 100, "Nested sub_param_y should be unchanged"
         assert not hasattr(mock_config.nested_params, "sub_param_z"), "Nested sub_param_z should not exist"
+
+
+def test_get_hf_auto_model_class_with_different_remote_implementation_name():
+    config = SimpleNamespace(
+        architectures=["OpenPanguVLForConditionalGeneration"],
+        auto_map={
+            "AutoModel": "modeling_openpangu_vl.OpenPanguVLModel",
+            "AutoModelForCausalLM": "modeling_openpangu_vl.OpenPanguVL",
+        },
+    )
+
+    assert get_hf_auto_model_class(config) is AutoModelForCausalLM
+
+
+def test_apply_openpangu_transformers_compat(monkeypatch):
+    monkeypatch.delattr(transformers_utils, "LossKwargs", raising=False)
+    monkeypatch.setattr(modeling_utils, "VLMS", [name for name in modeling_utils.VLMS if name != "openpanguvl"])
+
+    apply_openpangu_transformers_compat()
+
+    assert transformers_utils.LossKwargs is transformers_utils.TransformersKwargs
+    assert "openpanguvl" in modeling_utils.VLMS
+
+
+def test_apply_openpangu_config_compat():
+    config = SimpleNamespace(
+        text_config=SimpleNamespace(initializer_range=0.02),
+        vision_config=SimpleNamespace(),
+    )
+
+    apply_openpangu_config_compat(config)
+
+    assert config.vision_config.initializer_range == 0.02
+
+
+def test_normalize_openpangu_position_ids():
+    position_ids = torch.arange(4 * 2 * 8).reshape(4, 2, 8)
+
+    normalized = normalize_openpangu_position_ids(position_ids)
+
+    assert normalized.shape == (3, 2, 8)
+    assert torch.equal(normalized, position_ids[1:])

@@ -213,6 +213,11 @@ class HFModelConfig(BaseConfig):
             "Expect only one architecture, got {}".format(self.architectures)
         )
 
+        if self.architectures[0] == "OpenPanguVLForConditionalGeneration":
+            from verl.models.transformers.openpangu_vl import apply_openpangu_config_compat
+
+            apply_openpangu_config_compat(self.hf_config)
+
         # per model patch
         if getattr(self.hf_config, "model_type", None) == "kimi_vl":
             self.hf_config.text_config.topk_method = "greedy"

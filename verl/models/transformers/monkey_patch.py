@@ -494,6 +494,10 @@ def apply_monkey_patch(
             print("Not support fused kernels for KimiVL")
 
         return
+    elif model.config.model_type == "openpangu_vl":
+        from verl.models.transformers.openpangu_vl import patch_openpangu_model_position_ids
+
+        patch_openpangu_model_position_ids(model)
     elif model.config.model_type in ["qwen3_5", "qwen3_5_moe"]:
         # Step 1: patch model to support image-text mixed data
         from transformers.models.qwen3_5.modeling_qwen3_5 import (

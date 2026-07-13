@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openpangu-vllm-plugin"
+version = "0.1.0"
+requires-python = ">=3.10"
+
+[project.entry-points."vllm.general_plugins"]
+openpangu = "openpangu_vllm_plugin:register"
+
+[tool.setuptools]
+py-modules = ["openpangu_vllm_plugin"]

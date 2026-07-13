@@ -218,6 +218,13 @@ def hf_processor(name_or_path, **kwargs):
                 from transformers.models.qwen3_vl import Qwen3VLModel
 
                 model_class = Qwen3VLModel
+            case "OpenPanguVLProcessor":
+                from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+                from verl.models.transformers.openpangu_vl import apply_openpangu_transformers_compat
+
+                apply_openpangu_transformers_compat()
+                model_class = get_class_from_dynamic_module(config.auto_map["AutoModel"], name_or_path)
             case "Glm4vImageProcessor":
                 from transformers.models.glm4v import Glm4vModel
 

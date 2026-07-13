@@ -683,21 +683,27 @@ _architecture_to_auto_class = {
 }
 
 
+_remote_auto_class_mapping = {
+    "AutoModelForImageTextToText": AutoModelForImageTextToText,
+    "AutoModelForVision2Seq": AutoModelForVision2Seq,
+    "AutoModelForCausalLM": AutoModelForCausalLM,
+    "AutoModelForTokenClassification": AutoModelForTokenClassification,
+    "AutoModelForSequenceClassification": AutoModelForSequenceClassification,
+}
+
+
 def get_hf_auto_model_class(hf_config):
-    has_remote_code = hasattr(hf_config, "auto_map") and any(
-        hf_config.architectures[0] in val for val in hf_config.auto_map.values()
-    )
-    if has_remote_code:
-        auto_class = next(k for k, v in hf_config.auto_map.items() if hf_config.architectures[0] in v)
-        match auto_class:
-            case "AutoModelForVision2Seq":
-                actor_module_class = AutoModelForVision2Seq
-            case "AutoModelForCausalLM":
-                actor_module_class = AutoModelForCausalLM
-            case "AutoModelForImageTextToText":
-                actor_module_class = AutoModelForImageTextToText
-            case _:
-                actor_module_class = AutoModel
+    architecture = hf_config.architectures[0]
+    auto_map = getattr(hf_config, "auto_map", None) or {}
+    matched_auto_class = next((key for key, value in auto_map.items() if architecture in value), None)
+
+    if matched_auto_class is None:
+        # Some remote-code models expose a public architecture name that differs
+        # from the implementation class in auto_map (for example OpenPangu-VL).
+        matched_auto_class = next((key for key in _remote_auto_class_mapping if key in auto_map), None)
+
+    if matched_auto_class is not None:
+        actor_module_class = _remote_auto_class_mapping.get(matched_auto_class, AutoModel)
     else:
         actor_module_class = AutoModel
         # For VLM models, we use type to check instead of architecture
@@ -705,7 +711,7 @@ def get_hf_auto_model_class(hf_config):
             actor_module_class = AutoModelForImageTextToText
         else:
             for key, cls in _architecture_to_auto_class.items():
-                if key in hf_config.architectures[0]:
+                if key in architecture:
                     actor_module_class = cls
                     break
 

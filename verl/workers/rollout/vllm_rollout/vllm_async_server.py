@@ -372,6 +372,12 @@ class vLLMHttpServer:
             args.update({"enable_return_routed_experts": True})
 
         server_args = ["serve", self.model_config.local_path] + build_cli_args_from_config(args)
+        # build_cli_args_from_config skips False booleans, but these vLLM
+        # options default to enabled for supported VLMs and expose explicit
+        # BooleanOptionalAction negations.
+        for option in ("enable_chunked_prefill", "enable_prefix_caching"):
+            if args[option] is False:
+                server_args.append(f"--no-{option}")
 
         if self.replica_rank == 0:
             pprint(server_args)
