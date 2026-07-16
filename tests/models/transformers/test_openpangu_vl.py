@@ -28,7 +28,10 @@ from verl.models.transformers.openpangu_vl import (
     patch_openpangu_model_position_ids,
     patch_openpangu_processor,
 )
-from verl.models.transformers.openpangu_vllm import patch_openpangu_vllm_processing_info
+from verl.models.transformers.openpangu_vllm import (
+    patch_openpangu_vllm_processing_info,
+    patch_openpangu_vllm_vision_backend,
+)
 from verl.utils.model import get_hf_auto_model_class
 
 
@@ -113,6 +116,31 @@ def test_patch_openpangu_vllm_processing_info(monkeypatch):
 
     patch_openpangu_vllm_processing_info(FakeProcessingInfo)
     assert FakeProcessingInfo.get_hf_processor is patched_get_hf_processor
+
+
+def test_patch_openpangu_vllm_vision_backend():
+    observed_backends = []
+    original_backend = object()
+    flash_backend = object()
+
+    class FakeVisionTransformer:
+        def __init__(self):
+            observed_backends.append(model_module.get_vit_attn_backend())
+
+    model_module = SimpleNamespace(
+        OpenPanguVisionTransformer=FakeVisionTransformer,
+        get_vit_attn_backend=lambda: original_backend,
+    )
+
+    patch_openpangu_vllm_vision_backend(model_module, flash_backend)
+    patched_init = FakeVisionTransformer.__init__
+    FakeVisionTransformer()
+
+    assert observed_backends == [flash_backend]
+    assert model_module.get_vit_attn_backend() is original_backend
+
+    patch_openpangu_vllm_vision_backend(model_module, flash_backend)
+    assert FakeVisionTransformer.__init__ is patched_init
 
 
 def test_patch_openpangu_model_position_ids():
