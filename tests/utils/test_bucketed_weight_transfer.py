@@ -19,6 +19,7 @@ and because CUDA IPC requires distinct processes.
 
 import asyncio
 import multiprocessing as mp
+import os
 import uuid
 
 import pytest
@@ -61,29 +62,35 @@ def _generate_weights(weight_specs, seed):
 # ---------------------------------------------------------------------------
 # Process entry points (must be module-level for pickling with spawn)
 # ---------------------------------------------------------------------------
-def _sender_fn(zmq_handle, weight_specs, seed, bucket_size_mb, use_shm):
+def _sender_fn(zmq_handle, weight_specs, seed, bucket_size_mb, use_shm, enable_checksum=False):
     """Sender process: generate weights, move to device, send."""
     from verl.workers.rollout.vllm_rollout.bucketed_weight_transfer import BucketedWeightSender
 
     weights = _generate_weights(weight_specs, seed)
+    if enable_checksum:
+        os.environ["VERL_WEIGHT_SYNC_CHECKSUM"] = "1"
     sender = BucketedWeightSender(
         zmq_handle=zmq_handle,
         bucket_size_mb=bucket_size_mb,
         use_shm=use_shm,
+        enable_checksum=enable_checksum,
     )
     asyncio.run(sender.async_send_weights(iter(weights)))
 
 
-def _receiver_fn(zmq_handle, use_shm, result_queue):
+def _receiver_fn(zmq_handle, use_shm, result_queue, enable_checksum=False):
     """Receiver process: receive weights, send back (name, dtype, shape, checksum)."""
     from verl.utils.device import get_device_name
     from verl.workers.rollout.vllm_rollout.bucketed_weight_transfer import BucketedWeightReceiver
 
     device = torch.device(f"{get_device_name()}:0")
+    if enable_checksum:
+        os.environ["VERL_WEIGHT_SYNC_CHECKSUM"] = "1"
     receiver = BucketedWeightReceiver(
         zmq_handle=zmq_handle,
         device=device,
         use_shm=use_shm,
+        enable_checksum=enable_checksum,
     )
     received = []
     receiver.receive_weights(on_bucket_received=lambda w: received.extend([(name, t.clone()) for name, t in w]))
@@ -95,7 +102,7 @@ def _receiver_fn(zmq_handle, use_shm, result_queue):
 # ---------------------------------------------------------------------------
 # Test helper
 # ---------------------------------------------------------------------------
-def _transfer_and_validate(weight_specs, bucket_size_mb, use_shm):
+def _transfer_and_validate(weight_specs, bucket_size_mb, use_shm, enable_checksum=False):
     """Spawn sender + receiver processes, then validate received tensors."""
     zmq_handle = _unique_zmq_handle()
     seed = 42
@@ -104,11 +111,11 @@ def _transfer_and_validate(weight_specs, bucket_size_mb, use_shm):
 
     sender_p = ctx.Process(
         target=_sender_fn,
-        args=(zmq_handle, weight_specs, seed, bucket_size_mb, use_shm),
+        args=(zmq_handle, weight_specs, seed, bucket_size_mb, use_shm, enable_checksum),
     )
     receiver_p = ctx.Process(
         target=_receiver_fn,
-        args=(zmq_handle, use_shm, result_queue),
+        args=(zmq_handle, use_shm, result_queue, enable_checksum),
     )
 
     # Start sender first (it binds), then receiver (it connects)
@@ -176,6 +183,10 @@ class TestBucketedWeightTransferSHM:
 
     def test_empty_weights(self):
         _transfer_and_validate([], bucket_size_mb=1, use_shm=True)
+
+    def test_checksum_verification(self):
+        specs = [("layer.weight", (32, 16), torch.float32)]
+        _transfer_and_validate(specs, bucket_size_mb=1, use_shm=True, enable_checksum=True)
 
 
 # ---------------------------------------------------------------------------

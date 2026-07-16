@@ -18,6 +18,7 @@ Not recommended depending on vllm for this file.
 """
 
 import gc
+import hashlib
 import logging
 import os
 from multiprocessing import shared_memory
@@ -31,6 +32,8 @@ from verl.utils.device import get_device_id, get_device_name, get_torch_device
 
 logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "INFO"))
+
+WEIGHT_SYNC_CHECKSUM_ENV = "VERL_WEIGHT_SYNC_CHECKSUM"
 
 
 class TensorMetadata(TypedDict):
@@ -71,6 +74,26 @@ def rebuild_shared_memory(name: str, size: int, dtype=torch.uint8):
     return tensor, shm
 
 
+def update_weight_sync_checksum(checksum, bucket_meta: dict[str, TensorMetadata], shm) -> tuple[int, int]:
+    """Hash tensor metadata and bytes from one shared-memory bucket."""
+    tensor_count = 0
+    byte_count = 0
+    for name, meta in bucket_meta.items():
+        if meta["handle"] is not None:
+            raise ValueError("Weight sync checksum does not support direct IPC tensor handles")
+        size = meta["dtype"].itemsize * meta["shape"].numel()
+        descriptor = f"{name}\0{tuple(meta['shape'])}\0{meta['dtype']}\0{size}\0".encode()
+        checksum.update(descriptor)
+        view = shm.buf[meta["offset"] : meta["offset"] + size]
+        try:
+            checksum.update(view)
+        finally:
+            view.release()
+        tensor_count += 1
+        byte_count += size
+    return tensor_count, byte_count
+
+
 class BucketedWeightSender:
     """
     Send model weights via bucketed IPC transfer over ZMQ.
@@ -89,16 +112,23 @@ class BucketedWeightSender:
         zmq_handle: str,
         bucket_size_mb: int = 512,
         use_shm: bool = False,
+        enable_checksum: bool = False,
     ):
         self.zmq_handle = zmq_handle
         self.bucket_size_mb = bucket_size_mb
         self.bucket_size = int(bucket_size_mb) << 20
         self.use_shm = use_shm
+        self.enable_checksum = enable_checksum and os.getenv(WEIGHT_SYNC_CHECKSUM_ENV, "0") == "1"
+        if self.enable_checksum and not self.use_shm:
+            raise ValueError("Weight sync checksum is only supported for shared-memory transfers")
 
         self.zmq_context = zmq.Context.instance()
         self.socket = None
         self.buffer = None
         self.shm = None
+        self._checksum = None
+        self._checksum_tensor_count = 0
+        self._checksum_byte_count = 0
 
     async def async_send_weights(self, weights):
         """
@@ -112,6 +142,8 @@ class BucketedWeightSender:
         try:
             self._init_socket()
             self._init_buffer()
+            if self.enable_checksum:
+                self._checksum = hashlib.sha256()
 
             # send bucket weights
             offset = 0
@@ -128,6 +160,7 @@ class BucketedWeightSender:
                 # fill the tensor bucket
                 if offset + weight.nbytes > self.bucket_size and len(bucket_meta) > 0:
                     get_torch_device().synchronize()
+                    self._update_checksum(bucket_meta)
                     self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": False})
                     self.socket.recv()
                     bucket_meta = {}
@@ -153,10 +186,34 @@ class BucketedWeightSender:
 
             # send the last bucket
             get_torch_device().synchronize()
-            self.socket.send_pyobj({"bucket_meta": bucket_meta, "is_last": True})
+            self._update_checksum(bucket_meta)
+            final_metadata = {"bucket_meta": bucket_meta, "is_last": True}
+            if self._checksum is not None:
+                final_metadata["sender_checksum"] = self._checksum.hexdigest()
+                final_metadata["sender_tensor_count"] = self._checksum_tensor_count
+                final_metadata["sender_byte_count"] = self._checksum_byte_count
+            self.socket.send_pyobj(final_metadata)
             self.socket.recv()
+            self._log_checksum("sender")
         finally:
             self._cleanup()
+
+    def _update_checksum(self, bucket_meta: dict[str, TensorMetadata]):
+        if self._checksum is None:
+            return
+        tensor_count, byte_count = update_weight_sync_checksum(self._checksum, bucket_meta, self.shm)
+        self._checksum_tensor_count += tensor_count
+        self._checksum_byte_count += byte_count
+
+    def _log_checksum(self, role: str):
+        if self._checksum is not None:
+            logger.warning(
+                "Weight sync %s checksum: sha256=%s tensors=%d bytes=%d",
+                role,
+                self._checksum.hexdigest(),
+                self._checksum_tensor_count,
+                self._checksum_byte_count,
+            )
 
     def _init_socket(self):
         """Initialize ZMQ REQ socket and bind."""
@@ -248,15 +305,22 @@ class BucketedWeightReceiver:
         zmq_handle: str,
         device: torch.device,
         use_shm: bool = False,
+        enable_checksum: bool = False,
     ):
         self.zmq_handle = zmq_handle
         self.device = device
         self.use_shm = use_shm
+        self.enable_checksum = enable_checksum and os.getenv(WEIGHT_SYNC_CHECKSUM_ENV, "0") == "1"
+        if self.enable_checksum and not self.use_shm:
+            raise ValueError("Weight sync checksum is only supported for shared-memory transfers")
 
         self.zmq_context = zmq.Context.instance()
         self.socket = None
         self.buffer = None
         self.shm = None
+        self._checksum = None
+        self._checksum_tensor_count = 0
+        self._checksum_byte_count = 0
 
     def receive_weights(self, on_bucket_received: callable):
         """
@@ -268,10 +332,13 @@ class BucketedWeightReceiver:
         try:
             self._init_socket()
             self._init_buffer()
+            if self.enable_checksum:
+                self._checksum = hashlib.sha256()
 
             # receive bucket and update weights
             while True:
                 metadata = self.socket.recv_pyobj()
+                self._update_checksum(metadata["bucket_meta"])
                 weights, tensor = [], None
                 for name, meta in metadata["bucket_meta"].items():
                     shape, dtype, offset, handle = meta["shape"], meta["dtype"], meta["offset"], meta["handle"]
@@ -289,9 +356,50 @@ class BucketedWeightReceiver:
                 self.socket.send(b"")
                 del weights, tensor
                 if metadata["is_last"]:
+                    self._verify_sender_checksum(metadata)
                     break
+            self._log_checksum("receiver")
         finally:
             self._cleanup()
+
+    def _verify_sender_checksum(self, metadata: dict):
+        if self._checksum is None:
+            return
+        sender_checksum = metadata.get("sender_checksum")
+        receiver_checksum = self._checksum.hexdigest()
+        if sender_checksum is None:
+            raise RuntimeError("Weight sync sender did not provide a checksum")
+        if sender_checksum != receiver_checksum:
+            raise RuntimeError(
+                f"Weight sync checksum mismatch: sender={sender_checksum}, receiver={receiver_checksum}"
+            )
+        if metadata.get("sender_tensor_count") != self._checksum_tensor_count:
+            raise RuntimeError("Weight sync tensor count mismatch")
+        if metadata.get("sender_byte_count") != self._checksum_byte_count:
+            raise RuntimeError("Weight sync byte count mismatch")
+        logger.warning(
+            "Weight sync checksum verified: sha256=%s tensors=%d bytes=%d",
+            receiver_checksum,
+            self._checksum_tensor_count,
+            self._checksum_byte_count,
+        )
+
+    def _update_checksum(self, bucket_meta: dict[str, TensorMetadata]):
+        if self._checksum is None:
+            return
+        tensor_count, byte_count = update_weight_sync_checksum(self._checksum, bucket_meta, self.shm)
+        self._checksum_tensor_count += tensor_count
+        self._checksum_byte_count += byte_count
+
+    def _log_checksum(self, role: str):
+        if self._checksum is not None:
+            logger.warning(
+                "Weight sync %s checksum: sha256=%s tensors=%d bytes=%d",
+                role,
+                self._checksum.hexdigest(),
+                self._checksum_tensor_count,
+                self._checksum_byte_count,
+            )
 
     def _init_socket(self):
         """Initialize ZMQ REP socket and connect."""

@@ -652,6 +652,25 @@ class RayPPOTrainer:
             # unpad
             test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
 
+            if os.getenv("VERL_ROLLOUT_LOGPROB_CHECK", "0") == "1":
+                if "rollout_log_probs" not in test_output_gen_batch.batch:
+                    raise RuntimeError("Rollout did not return rollout_log_probs")
+                rollout_log_probs = test_output_gen_batch.batch["rollout_log_probs"]
+                response_mask = test_output_gen_batch.batch["response_mask"].bool()
+                if rollout_log_probs.shape != response_mask.shape:
+                    raise RuntimeError(
+                        f"Rollout log probability shape mismatch: {rollout_log_probs.shape} != {response_mask.shape}"
+                    )
+                if not torch.isfinite(rollout_log_probs[response_mask]).all():
+                    raise RuntimeError("Rollout returned non-finite log probabilities")
+                checked_tokens = int(response_mask.sum().item())
+                if checked_tokens == 0:
+                    raise RuntimeError("Rollout log probability check found no generated tokens")
+                print(
+                    "Rollout log probability check passed: "
+                    f"samples={len(test_output_gen_batch)} tokens={checked_tokens}"
+                )
+
             print("validation generation end")
 
             # Store generated outputs
@@ -854,6 +873,8 @@ class RayPPOTrainer:
                     OmegaConf.select(self.config.global_profiler.global_tool_config.nsys, "worker_nsight_options")
                 )
         wg_kwargs["device_name"] = self.device_name
+        if os.getenv("VERL_WEIGHT_SYNC_CHECKSUM", "0") == "1":
+            wg_kwargs["worker_env"] = {"VERL_WEIGHT_SYNC_CHECKSUM": "1"}
 
         for resource_pool, class_dict in self.resource_pool_to_cls.items():
             if not class_dict:

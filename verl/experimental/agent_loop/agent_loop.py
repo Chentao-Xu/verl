@@ -28,6 +28,7 @@ and is designed to be fully replaceable by other agent frameworks such as:
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import random
@@ -916,7 +917,12 @@ class AgentLoopWorker:
                 mm_token_type_ids[0][input_ids[0] == image_token_id] = 1
             if video_token_id is not None:
                 mm_token_type_ids[0][input_ids[0] == video_token_id] = 2
-            multi_modal_kwargs["mm_token_type_ids"] = mm_token_type_ids
+            rope_index_parameters = inspect.signature(self.processor.get_rope_index).parameters
+            accepts_mm_token_type_ids = "mm_token_type_ids" in rope_index_parameters or any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in rope_index_parameters.values()
+            )
+            if accepts_mm_token_type_ids:
+                multi_modal_kwargs["mm_token_type_ids"] = mm_token_type_ids
 
         # Model's get_rope_index has been dynamically bind to the processor.
         vision_position_ids, _ = self.processor.get_rope_index(
