@@ -28,6 +28,7 @@ from verl.models.transformers.openpangu_vl import (
     patch_openpangu_model_position_ids,
     patch_openpangu_processor,
 )
+from verl.models.transformers.openpangu_vllm import patch_openpangu_vllm_processing_info
 from verl.utils.model import get_hf_auto_model_class
 
 
@@ -89,6 +90,29 @@ def test_patch_openpangu_processor(monkeypatch):
     patch_openpangu_processor(processor_class())
 
     assert processor_module.np.__name__ == "numpy"
+
+
+def test_patch_openpangu_vllm_processing_info(monkeypatch):
+    module_name = "fake_openpangu_vllm_processor"
+    processor_module = ModuleType(module_name)
+    monkeypatch.setitem(sys.modules, module_name, processor_module)
+    processor_class = type("FakeOpenPanguProcessor", (), {"__module__": module_name})
+
+    class FakeProcessingInfo:
+        def get_hf_processor(self, marker=None):
+            assert marker == "expected"
+            return processor_class()
+
+    original_get_hf_processor = FakeProcessingInfo.get_hf_processor
+    patch_openpangu_vllm_processing_info(FakeProcessingInfo)
+    patched_get_hf_processor = FakeProcessingInfo.get_hf_processor
+    processor = FakeProcessingInfo().get_hf_processor(marker="expected")
+
+    assert patched_get_hf_processor is not original_get_hf_processor
+    assert processor_module.np.__name__ == "numpy"
+
+    patch_openpangu_vllm_processing_info(FakeProcessingInfo)
+    assert FakeProcessingInfo.get_hf_processor is patched_get_hf_processor
 
 
 def test_patch_openpangu_model_position_ids():

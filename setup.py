@@ -90,6 +90,11 @@ setup(
     description="verl: Volcano Engine Reinforcement Learning for LLM",
     install_requires=install_requires,
     extras_require=extras_require,
+    entry_points={
+        "vllm.general_plugins": [
+            "openpangu_vl = verl.models.transformers.openpangu_vllm:register",
+        ],
+    },
     package_data={
         "": ["version/*"],
         "verl": [
