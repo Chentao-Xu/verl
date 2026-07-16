@@ -95,6 +95,7 @@ def main() -> None:
     from vllm.config import ModelConfig
     from vllm.model_executor.models.interfaces import SupportsMRoPE
     from vllm.model_executor.models.openpangu_vl import OpenPanguVLForConditionalGeneration
+    from vllm.model_executor.models.openpangu_vl import OpenPanguVisionTransformer
     from vllm.multimodal import MULTIMODAL_REGISTRY
     from vllm.plugins import load_general_plugins
 
@@ -124,6 +125,8 @@ def main() -> None:
         raise AssertionError("OpenPangu vLLM model is not marked as multimodal")
     if SupportsMRoPE not in OpenPanguVLForConditionalGeneration.__mro__:
         raise AssertionError("OpenPangu vLLM model does not implement the native mRoPE interface")
+    if not getattr(OpenPanguVisionTransformer, "_verl_ascend_backend_compat", False):
+        raise AssertionError("OpenPangu Ascend vision backend compatibility was not applied")
 
     processor = MULTIMODAL_REGISTRY.create_processor(model_config)
     hf_processor = processor.info.get_hf_processor()
