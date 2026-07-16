@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--device", default="npu:0")
+    parser.add_argument("--attention-implementation", default="eager")
     return parser.parse_args()
 
 
@@ -94,7 +95,7 @@ def main() -> None:
     model_config = HFModelConfig(
         path=args.model_path,
         trust_remote_code=True,
-        override_config={"attn_implementation": "eager"},
+        override_config={"attn_implementation": args.attention_implementation},
     )
     auto_class = get_hf_auto_model_class(model_config.hf_config)
     model, loading_info = auto_class.from_pretrained(

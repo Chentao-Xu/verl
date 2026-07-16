@@ -20,6 +20,8 @@ MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-1536}
 MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-512}
 MAX_MODEL_LENGTH=${MAX_MODEL_LENGTH:-2048}
 PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-4096}
+ACTOR_ATTN_IMPLEMENTATION=${ACTOR_ATTN_IMPLEMENTATION:-eager}
+FSDP_CPU_OFFLOAD_POLICY=${FSDP_CPU_OFFLOAD_POLICY:-False}
 
 if ((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH > MAX_MODEL_LENGTH)); then
     echo "MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH must not exceed MAX_MODEL_LENGTH" >&2
@@ -72,6 +74,7 @@ DATA=(
 MODEL=(
     actor_rollout_ref.model.path="${MODEL_PATH}"
     actor_rollout_ref.model.trust_remote_code=True
+    +actor_rollout_ref.model.override_config.attn_implementation="${ACTOR_ATTN_IMPLEMENTATION}"
     actor_rollout_ref.model.use_remove_padding=False
     actor_rollout_ref.model.use_fused_kernels=False
     actor_rollout_ref.model.enable_gradient_checkpointing=True
@@ -90,7 +93,7 @@ ACTOR=(
     actor_rollout_ref.actor.use_torch_compile=False
     actor_rollout_ref.actor.fsdp_config.fsdp_size=${NDEVICES_PER_NODE}
     actor_rollout_ref.actor.fsdp_config.reshard_after_forward=True
-    actor_rollout_ref.actor.fsdp_config.offload_policy=True
+    actor_rollout_ref.actor.fsdp_config.offload_policy=${FSDP_CPU_OFFLOAD_POLICY}
     actor_rollout_ref.actor.fsdp_config.param_offload=True
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
 )
