@@ -684,6 +684,13 @@ _architecture_to_auto_class = {
 
 
 def get_hf_auto_model_class(hf_config):
+    if getattr(hf_config, "model_type", None) == "openpangu_vl":
+        from verl.models.transformers.openpangu_vl import apply_openpangu_transformers_compat
+
+        apply_openpangu_transformers_compat()
+        if "AutoModelForCausalLM" in (getattr(hf_config, "auto_map", None) or {}):
+            return AutoModelForCausalLM
+
     has_remote_code = hasattr(hf_config, "auto_map") and any(
         hf_config.architectures[0] in val for val in hf_config.auto_map.values()
     )
