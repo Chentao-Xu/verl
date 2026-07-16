@@ -127,6 +127,11 @@ def build_multimodal_processor_inputs(
         processor_kwargs.setdefault("video_metadata", video_metadata)
         processor_kwargs.setdefault("do_sample_frames", False)
 
+    if images is not None and processor.__class__.__name__ == "OpenPanguVLProcessor":
+        from verl.models.transformers.openpangu_vl import normalize_openpangu_processor_text
+
+        text = normalize_openpangu_processor_text(processor, text)
+
     processor_inputs = {"text": text, "images": images, "videos": videos, **processor_kwargs}
     if audio is not None:
         processor_inputs["audio"] = audio

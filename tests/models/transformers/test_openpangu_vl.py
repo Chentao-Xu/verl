@@ -20,10 +20,12 @@ import transformers.utils as transformers_utils
 from transformers import AutoModelForCausalLM
 from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
 
+from verl.experimental.agent_loop.agent_loop import AgentLoopWorker
 from verl.models.transformers.openpangu_vl import (
     OPENPANGU_MODEL_TYPE,
     apply_openpangu_config_compat,
     apply_openpangu_transformers_compat,
+    normalize_openpangu_processor_text,
     normalize_openpangu_position_ids,
     patch_openpangu_model_position_ids,
     patch_openpangu_processor,
@@ -82,6 +84,54 @@ def test_normalize_openpangu_position_ids():
 
     assert normalized.shape == (3, 2, 8)
     assert torch.equal(normalized, position_ids[1:])
+
+
+def test_normalize_openpangu_processor_text_collapses_expanded_image_tokens():
+    processor = SimpleNamespace(
+        image_token="[unused19]",
+        vision_start_token="[unused18]",
+        vision_end_token="[unused20]",
+    )
+    text = [
+        "before[unused18]" + "[unused19]" * 4 + "[unused20]after",
+        "[unused18][unused19][unused20]second",
+    ]
+
+    normalized = normalize_openpangu_processor_text(processor, text)
+
+    assert normalized == [
+        "before[unused18][unused19][unused20]after",
+        "[unused18][unused19][unused20]second",
+    ]
+    assert normalized is not text
+
+
+def test_agent_loop_omits_unsupported_mm_token_type_ids_for_openpangu():
+    class FakeProcessor:
+        image_token_id = 19
+        video_token_id = 32
+
+        def get_rope_index(self, input_ids, attention_mask, image_grid_thw=None, video_grid_thw=None):
+            del image_grid_thw, video_grid_thw
+            return torch.zeros((3, input_ids.shape[0], input_ids.shape[1]), dtype=torch.long), None
+
+    worker = SimpleNamespace(processor=FakeProcessor())
+    input_ids = torch.tensor([[1, 19, 19, 2]])
+    attention_mask = torch.ones_like(input_ids)
+    multi_modal_inputs = {
+        "image_grid_thw": torch.tensor([[1, 2, 2]]),
+        "mm_token_type_ids": torch.tensor([[0, 1, 1, 0]]),
+    }
+
+    position_ids = AgentLoopWorker._compute_position_ids(
+        worker,
+        input_ids,
+        attention_mask,
+        multi_modal_inputs,
+    )
+
+    assert position_ids.shape == (1, 4, 4)
+    assert "mm_token_type_ids" not in multi_modal_inputs
 
 
 def test_patch_openpangu_processor(monkeypatch):

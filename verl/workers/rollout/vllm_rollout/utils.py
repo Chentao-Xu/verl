@@ -274,10 +274,14 @@ class vLLMColocateWorkerExtension:
                 patch_vllm_moe_model_weight_loader(model)
 
         assert self.device is not None
+        zmq_handle = self._get_zmq_handle()
         receiver = BucketedWeightReceiver(
-            zmq_handle=self._get_zmq_handle(),
+            zmq_handle=zmq_handle,
             device=self.device,
             use_shm=use_shm,
+            enable_checksum=(
+                os.environ.get("VERL_REPLICA_RANK", "0") == "0" and zmq_handle.endswith("-rank-0.sock")
+            ),
         )
         receiver.receive_weights(
             on_bucket_received=lambda weights: self._update_weights(

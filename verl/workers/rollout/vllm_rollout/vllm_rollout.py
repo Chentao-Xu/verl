@@ -184,6 +184,7 @@ class ServerAdapter(BaseRollout):
             zmq_handle=self.zmq_handle,
             bucket_size_mb=bucket_size_mb,
             use_shm=self.use_shm,
+            enable_checksum=self.replica_rank == 0 and self.rollout_rank == 0,
         )
         await sender.async_send_weights(weights)
 

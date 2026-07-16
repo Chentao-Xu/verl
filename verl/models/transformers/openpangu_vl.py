@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import sys
 from functools import wraps
 
@@ -95,6 +96,31 @@ def patch_openpangu_processor(processor) -> None:
         processor_module.np = np
 
 
+def normalize_openpangu_processor_text(processor, text):
+    """Collapse expanded image-token runs back to one processor placeholder."""
+    if text is None:
+        return text
+
+    image_token = processor.image_token
+    vision_start_token = processor.vision_start_token
+    vision_end_token = processor.vision_end_token
+    expanded_image_pattern = re.compile(
+        re.escape(vision_start_token)
+        + "(?:"
+        + re.escape(image_token)
+        + ")+"
+        + re.escape(vision_end_token)
+    )
+    placeholder = vision_start_token + image_token + vision_end_token
+
+    def normalize(value):
+        return expanded_image_pattern.sub(placeholder, value)
+
+    if isinstance(text, str):
+        return normalize(text)
+    return [normalize(value) for value in text]
+
+
 def normalize_openpangu_position_ids(position_ids: torch.Tensor | None) -> torch.Tensor | None:
     """Drop Verl's leading text position row from OpenPangu mRoPE positions."""
     if position_ids is not None and position_ids.ndim == 3 and position_ids.shape[0] == 4:
@@ -129,6 +155,7 @@ __all__ = [
     "OPENPANGU_MODEL_TYPE",
     "apply_openpangu_config_compat",
     "apply_openpangu_transformers_compat",
+    "normalize_openpangu_processor_text",
     "normalize_openpangu_position_ids",
     "patch_openpangu_processor",
     "patch_openpangu_model_position_ids",
