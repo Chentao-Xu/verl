@@ -149,6 +149,39 @@ def patch_openpangu_model_position_ids(model) -> None:
     model_class._verl_position_ids_compat = True
 
 
+def patch_openpangu_npu_attention_mask(model) -> None:
+    """Correct the published model's inverted Ascend bool-mask semantics."""
+    attention_classes = {
+        module.__class__
+        for module in model.modules()
+        if module.__class__.__name__ == "PanguEmbeddedAttention"
+    }
+    for attention_class in attention_classes:
+        if getattr(attention_class, "_verl_npu_attention_mask_compat", False):
+            continue
+
+        original_forward = attention_class.forward
+
+        def make_forward(original):
+            @wraps(original)
+            def forward(self, *args, attention_mask=None, **kwargs):
+                attention_module = sys.modules[self.__class__.__module__]
+                if (
+                    attention_mask is not None
+                    and not self.training
+                    and getattr(attention_module, "NPU_ATTN_INFR", False)
+                ):
+                    # The remote code inverts this again. Pre-inverting here
+                    # makes True mean "masked", as required by the Ascend op.
+                    attention_mask = ~attention_mask.bool()
+                return original(self, *args, attention_mask=attention_mask, **kwargs)
+
+            return forward
+
+        attention_class.forward = make_forward(original_forward)
+        attention_class._verl_npu_attention_mask_compat = True
+
+
 __all__ = [
     "OPENPANGU_ARCHITECTURE",
     "OPENPANGU_KEY_MAPPING",
@@ -157,6 +190,7 @@ __all__ = [
     "apply_openpangu_transformers_compat",
     "normalize_openpangu_processor_text",
     "normalize_openpangu_position_ids",
+    "patch_openpangu_npu_attention_mask",
     "patch_openpangu_processor",
     "patch_openpangu_model_position_ids",
 ]

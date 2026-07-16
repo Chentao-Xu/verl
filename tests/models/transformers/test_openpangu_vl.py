@@ -28,6 +28,7 @@ from verl.models.transformers.openpangu_vl import (
     normalize_openpangu_processor_text,
     normalize_openpangu_position_ids,
     patch_openpangu_model_position_ids,
+    patch_openpangu_npu_attention_mask,
     patch_openpangu_processor,
 )
 from verl.models.transformers.openpangu_vllm import (
@@ -203,3 +204,30 @@ def test_patch_openpangu_model_position_ids():
     position_ids = torch.arange(4 * 2 * 8).reshape(4, 2, 8)
 
     assert torch.equal(model.forward(position_ids=position_ids), position_ids[1:])
+
+
+def test_patch_openpangu_npu_attention_mask(monkeypatch):
+    class PanguEmbeddedAttention(torch.nn.Module):
+        def forward(self, attention_mask=None):
+            if not self.training and NPU_ATTN_INFR:
+                return ~attention_mask.bool()
+            return attention_mask
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.attention = PanguEmbeddedAttention()
+
+    monkeypatch.setitem(
+        sys.modules[PanguEmbeddedAttention.__module__].__dict__,
+        "NPU_ATTN_INFR",
+        True,
+    )
+    model = FakeModel().eval()
+    additive_mask = torch.tensor([[0.0, torch.finfo(torch.float32).min], [0.0, 0.0]])
+
+    patch_openpangu_npu_attention_mask(model)
+
+    assert torch.equal(model.attention(attention_mask=additive_mask), additive_mask.bool())
+    model.train()
+    assert torch.equal(model.attention(attention_mask=additive_mask), additive_mask)
