@@ -218,6 +218,17 @@ def hf_processor(name_or_path, **kwargs):
                 from transformers.models.qwen3_vl import Qwen3VLModel
 
                 model_class = Qwen3VLModel
+            case "OpenPanguVLProcessor":
+                from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+                from verl.models.transformers.openpangu_vl import (
+                    apply_openpangu_transformers_compat,
+                    patch_openpangu_processor,
+                )
+
+                apply_openpangu_transformers_compat()
+                patch_openpangu_processor(processor)
+                model_class = get_class_from_dynamic_module(config.auto_map["AutoModel"], name_or_path)
             case "Glm4vImageProcessor":
                 from transformers.models.glm4v import Glm4vModel
 
@@ -235,6 +246,10 @@ def hf_processor(name_or_path, **kwargs):
             processor.get_rope_index = types.MethodType(model_class.get_rope_index, processor)
             if hasattr(model_class, "get_vision_position_ids"):
                 processor.get_vision_position_ids = types.MethodType(model_class.get_vision_position_ids, processor)
+            if hasattr(model_class, "_get_llm_pos_ids_for_vision"):
+                processor._get_llm_pos_ids_for_vision = types.MethodType(
+                    model_class._get_llm_pos_ids_for_vision, processor
+                )
     except Exception as e:
         processor = None
         # TODO(haibin.lin): try-catch should be removed after adding transformer version req to setup.py to avoid
