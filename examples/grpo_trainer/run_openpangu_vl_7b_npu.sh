@@ -20,7 +20,7 @@ MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-1536}
 MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-512}
 MAX_MODEL_LENGTH=${MAX_MODEL_LENGTH:-2048}
 PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-4096}
-ACTOR_ATTN_IMPLEMENTATION=${ACTOR_ATTN_IMPLEMENTATION:-eager}
+ACTOR_ATTN_IMPLEMENTATION=${ACTOR_ATTN_IMPLEMENTATION:-sdpa}
 FSDP_CPU_OFFLOAD_POLICY=${FSDP_CPU_OFFLOAD_POLICY:-False}
 
 if ((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH > MAX_MODEL_LENGTH)); then
@@ -41,6 +41,11 @@ EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_fsdp2_vllm}
 LOG_DIR=${LOG_DIR:-/data/openpangu-vl-npu/stage5}
 LOG_VAL_GENERATIONS=${LOG_VAL_GENERATIONS:-8}
 VALIDATION_DATA_DIR=${VALIDATION_DATA_DIR:-${LOG_DIR}/${EXPERIMENT_NAME}-validation}
+TRAINER_LOGGER=${TRAINER_LOGGER:-'["console"]'}
+SAVE_FREQ=${SAVE_FREQ:--1}
+TEST_FREQ=${TEST_FREQ:--1}
+RESUME_MODE=${RESUME_MODE:-disable}
+CHECKPOINT_DIR=${CHECKPOINT_DIR:-/data/openpangu-vl-npu/checkpoints/${EXPERIMENT_NAME}}
 mkdir -p "${LOG_DIR}"
 
 export HCCL_CONNECT_TIMEOUT=${HCCL_CONNECT_TIMEOUT:-1500}
@@ -123,20 +128,21 @@ ROLLOUT=(
 )
 
 TRAINER=(
-    trainer.logger='["console"]'
+    trainer.logger="${TRAINER_LOGGER}"
     trainer.project_name="${PROJECT_NAME}"
     trainer.experiment_name="${EXPERIMENT_NAME}"
     trainer.n_gpus_per_node=${NDEVICES_PER_NODE}
     trainer.nnodes=1
-    trainer.resume_mode=disable
+    trainer.resume_mode="${RESUME_MODE}"
     trainer.val_before_train=True
     trainer.val_only=False
-    trainer.save_freq=-1
-    trainer.test_freq=-1
+    trainer.save_freq=${SAVE_FREQ}
+    trainer.test_freq=${TEST_FREQ}
     trainer.total_epochs=1
     trainer.total_training_steps=${TOTAL_TRAINING_STEPS}
     trainer.log_val_generations=${LOG_VAL_GENERATIONS}
     trainer.validation_data_dir="${VALIDATION_DATA_DIR}"
+    trainer.default_local_dir="${CHECKPOINT_DIR}"
 )
 
 if [[ "${ROLLOUT_ONLY}" == "1" ]]; then
