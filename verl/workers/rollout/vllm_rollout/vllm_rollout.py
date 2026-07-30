@@ -107,13 +107,15 @@ class ServerAdapter(BaseRollout):
         job_id = ray.get_runtime_context().get_job_id()
         self.zmq_handle = f"ipc:///tmp/rl-colocate-zmq-{job_id}-replica-{self.replica_rank}-rank-{local_rank}.sock"
 
-        self.use_shm = not is_support_ipc()
+        force_weight_sync_shm = os.getenv("VERL_FORCE_WEIGHT_SYNC_SHM", "0") == "1"
+        self.use_shm = force_weight_sync_shm or not is_support_ipc()
         if self.use_shm:
             logger.warning(
-                "IPC is not supported on your devices. Falling back to shared memory for weight transfer, "
+                "Using shared memory for weight transfer (forced=%s), "
                 "which may cause performance degradation. If you are using Ascend NPUs, please ensure that "
                 "your software and CANN toolkit versions meet the requirements for IPC support. (Ascend HDK version "
-                ">= 25.3.rc1 and CANN toolkit version >= 8.3.RC1)"
+                ">= 25.3.rc1 and CANN toolkit version >= 8.3.RC1)",
+                force_weight_sync_shm,
             )
 
     def _ensure_server_handle(self) -> bool:
