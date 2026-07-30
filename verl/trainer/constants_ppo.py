@@ -77,7 +77,10 @@ def get_ppo_ray_runtime_env():
     for key in (
         "PYTHONHASHSEED",
         "VERL_FULL_DETERMINISM",
+        "VERL_FORCE_WEIGHT_SYNC_SHM",
         "VERL_ROLLOUT_LOGPROB_CHECK",
+        "VERL_SKIP_WEIGHT_RELOAD_POSTPROCESS",
+        "VERL_WEIGHT_SYNC_AUDIT",
         "VERL_WEIGHT_SYNC_CHECKSUM",
         "VLLM_BATCH_INVARIANT",
     ):

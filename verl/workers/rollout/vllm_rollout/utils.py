@@ -283,11 +283,27 @@ class vLLMColocateWorkerExtension:
                 os.environ.get("VERL_REPLICA_RANK", "0") == "0" and zmq_handle.endswith("-rank-0.sock")
             ),
         )
+        self._weight_sync_source_names = set()
+        self._weight_sync_loaded_params = set()
         receiver.receive_weights(
             on_bucket_received=lambda weights: self._update_weights(
                 weights, peft_config=peft_config, base_sync_done=base_sync_done
             )
         )
+
+        if os.environ.get("VERL_WEIGHT_SYNC_AUDIT", "0") == "1" and use_standard_weight_load:
+            model_params = {name for name, _ in self.model_runner.model.named_parameters(remove_duplicate=False)}
+            missing = sorted(model_params - self._weight_sync_loaded_params)
+            logger.warning(
+                "Weight sync audit: source_tensors=%d loaded_params=%d model_params=%d missing=%d",
+                len(self._weight_sync_source_names),
+                len(self._weight_sync_loaded_params),
+                len(model_params),
+                len(missing),
+            )
+            if missing:
+                preview = ", ".join(missing[:50])
+                raise RuntimeError(f"Weight sync left {len(missing)} vLLM parameters unloaded: {preview}")
 
         if self._is_qat_model:
             # QAT (compressed-tensors): call process_weights_after_loading AFTER all buckets are received
@@ -302,11 +318,24 @@ class vLLMColocateWorkerExtension:
             modelopt_process_weights_after_loading(self.model_runner.model)
             logger.info("ModelOpt QAT: process_weights_after_loading completed")
         elif use_standard_weight_load:
-            # Some post-load transforms are non-idempotent; run once after all buckets.
-            from vllm.model_executor.model_loader.utils import process_weights_after_loading
+            # Ascend parameters have already been converted to their internal
+            # format during dummy-model initialization. load_weights copies the
+            # refreshed values into that storage; converting them again corrupts
+            # the layout and produces non-finite rollout log probabilities.
+            skip_postprocess = (
+                current_platform.device_type == "npu"
+                or os.environ.get("VERL_SKIP_WEIGHT_RELOAD_POSTPROCESS", "0") == "1"
+            )
+            if skip_postprocess:
+                logger.warning(
+                    "Skipping process_weights_after_loading after dynamic weight reload (device=%s)",
+                    current_platform.device_type,
+                )
+            else:
+                from vllm.model_executor.model_loader.utils import process_weights_after_loading
 
-            for model, model_config in self._iter_all_models_with_config():
-                process_weights_after_loading(model, model_config, self.device)
+                for model, model_config in self._iter_all_models_with_config():
+                    process_weights_after_loading(model, model_config, self.device)
 
     def _apply_buffer_updates_all_models(self, buffer_updates, main_named_buffers):
         """Apply buffer updates to the main model and any synced MTP drafter.
@@ -351,8 +380,14 @@ class vLLMColocateWorkerExtension:
                 )
             else:
                 if param_updates:
-                    for model in self._iter_all_models():
-                        model.load_weights(param_updates)
+                    if not hasattr(self, "_weight_sync_source_names"):
+                        self._weight_sync_source_names = set()
+                        self._weight_sync_loaded_params = set()
+                    self._weight_sync_source_names.update(name for name, _ in param_updates)
+                    for model_index, model in enumerate(self._iter_all_models()):
+                        loaded_params = model.load_weights(param_updates)
+                        if model_index == 0 and loaded_params is not None:
+                            self._weight_sync_loaded_params.update(loaded_params)
                 loaded_buffers = self._apply_buffer_updates_all_models(buffer_updates, named_buffers)
                 logger.info(
                     f"Loading standard weights (non-FP8, async), "
