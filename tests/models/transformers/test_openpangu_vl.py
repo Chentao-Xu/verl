@@ -25,11 +25,13 @@ from verl.models.transformers.openpangu_vl import (
     OPENPANGU_MODEL_TYPE,
     apply_openpangu_config_compat,
     apply_openpangu_transformers_compat,
+    disable_openpangu_npu_fused_infer_attention,
     normalize_openpangu_processor_text,
     normalize_openpangu_position_ids,
     patch_openpangu_model_position_ids,
     patch_openpangu_npu_attention_mask,
     patch_openpangu_processor,
+    reinitialize_openpangu_rotary_embeddings,
 )
 from verl.models.transformers.openpangu_vllm import (
     patch_openpangu_vllm_processing_info,
@@ -206,7 +208,41 @@ def test_patch_openpangu_model_position_ids():
     assert torch.equal(model.forward(position_ids=position_ids), position_ids[1:])
 
 
-def test_patch_openpangu_npu_attention_mask(monkeypatch):
+def test_reinitialize_openpangu_rotary_embeddings():
+    class OpenPanguVLRotaryEmbedding(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.config = object()
+            self.register_buffer("inv_freq", torch.zeros(2), persistent=False)
+            self.original_inv_freq = self.inv_freq
+            self.attention_scaling = 0.0
+
+        @staticmethod
+        def rope_init_fn(config, device):
+            del config
+            return torch.tensor([1.0, 0.5], device=device), 1.0
+
+    class FakeModel(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.rotary = OpenPanguVLRotaryEmbedding()
+            self.vision_rotary = OpenPanguVisionRotaryEmbedding()
+
+    class OpenPanguVisionRotaryEmbedding(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("inv_freq", torch.zeros(2), persistent=False)
+
+    model = FakeModel()
+    reinitialize_openpangu_rotary_embeddings(model)
+
+    assert torch.equal(model.rotary.inv_freq, torch.tensor([1.0, 0.5]))
+    assert model.rotary.original_inv_freq is model.rotary.inv_freq
+    assert model.rotary.attention_scaling == 1.0
+    assert torch.allclose(model.vision_rotary.inv_freq, torch.tensor([1.0, 0.01]))
+
+
+def test_disable_openpangu_npu_fused_infer_attention(monkeypatch):
     class PanguEmbeddedAttention(torch.nn.Module):
         def forward(self, attention_mask=None):
             if not self.training and NPU_ATTN_INFR:
@@ -218,16 +254,30 @@ def test_patch_openpangu_npu_attention_mask(monkeypatch):
             super().__init__()
             self.attention = PanguEmbeddedAttention()
 
+    class OpenPanguVLVisionAttention(torch.nn.Module):
+        pass
+
+    class FakeMultimodalModel(FakeModel):
+        def __init__(self):
+            super().__init__()
+            self.vision_attention = OpenPanguVLVisionAttention()
+
     monkeypatch.setitem(
         sys.modules[PanguEmbeddedAttention.__module__].__dict__,
         "NPU_ATTN_INFR",
         True,
     )
-    model = FakeModel().eval()
+    monkeypatch.setitem(
+        sys.modules[OpenPanguVLVisionAttention.__module__].__dict__,
+        "NPU_ATTN_INFR",
+        True,
+    )
+    model = FakeMultimodalModel().eval()
     additive_mask = torch.tensor([[0.0, torch.finfo(torch.float32).min], [0.0, 0.0]])
 
-    patch_openpangu_npu_attention_mask(model)
+    disable_openpangu_npu_fused_infer_attention(model)
 
-    assert torch.equal(model.attention(attention_mask=additive_mask), additive_mask.bool())
+    assert torch.equal(model.attention(attention_mask=additive_mask), additive_mask)
+    assert NPU_ATTN_INFR is False
     model.train()
     assert torch.equal(model.attention(attention_mask=additive_mask), additive_mask)
