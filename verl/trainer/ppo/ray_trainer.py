@@ -674,8 +674,17 @@ class RayPPOTrainer:
             print("validation generation end")
 
             # Store generated outputs
+            # Some slow tokenizers rebuild their special-token lookup for every
+            # token when skip_special_tokens=True. Cache the lookup once and
+            # filter IDs before decoding to keep full-set validation practical.
+            special_token_ids = set(self.tokenizer.all_special_ids)
+
+            def decode_without_special_tokens(ids):
+                filtered_ids = [int(token_id) for token_id in ids if int(token_id) not in special_token_ids]
+                return self.tokenizer.decode(filtered_ids, skip_special_tokens=False)
+
             output_ids = test_output_gen_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = [decode_without_special_tokens(ids) for ids in output_ids]
             sample_outputs.extend(output_texts)
 
             test_batch = test_batch.union(test_output_gen_batch)
@@ -684,7 +693,7 @@ class RayPPOTrainer:
             # Store original inputs
             input_ids = test_batch.batch["prompts"]
             # TODO: Can we keep special tokens except for padding tokens?
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+            input_texts = [decode_without_special_tokens(ids) for ids in input_ids]
             sample_inputs.extend(input_texts)
             sample_uids.extend(test_batch.non_tensor_batch["uid"])
 
