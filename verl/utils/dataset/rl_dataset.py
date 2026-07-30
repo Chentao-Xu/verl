@@ -267,7 +267,7 @@ class RLHFDataset(Dataset):
 
             dataframe = dataframe.filter(
                 lambda doc: doc2len(doc) <= self.max_prompt_length,
-                num_proc=self.num_workers,
+                num_proc=self.num_workers if self.num_workers > 1 else None,
                 desc=f"Filtering prompts longer than {self.max_prompt_length} tokens",
             )
 
