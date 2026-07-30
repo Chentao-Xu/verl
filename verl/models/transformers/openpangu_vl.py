@@ -149,37 +149,48 @@ def patch_openpangu_model_position_ids(model) -> None:
     model_class._verl_position_ids_compat = True
 
 
-def patch_openpangu_npu_attention_mask(model) -> None:
-    """Correct the published model's inverted Ascend bool-mask semantics."""
-    attention_classes = {
-        module.__class__
-        for module in model.modules()
-        if module.__class__.__name__ == "PanguEmbeddedAttention"
-    }
-    for attention_class in attention_classes:
-        if getattr(attention_class, "_verl_npu_attention_mask_compat", False):
+def reinitialize_openpangu_rotary_embeddings(model) -> None:
+    """Materialize OpenPangu language and vision RoPE buffers after meta loading."""
+    for module in model.modules():
+        class_name = module.__class__.__name__
+        if class_name not in {"OpenPanguVLRotaryEmbedding", "OpenPanguVisionRotaryEmbedding"}:
             continue
+        current_device = module.inv_freq.device
+        target_device = None if current_device.type == "meta" else current_device
+        if class_name == "OpenPanguVLRotaryEmbedding":
+            inv_freq, attention_scaling = module.rope_init_fn(module.config, target_device)
+            module.register_buffer("inv_freq", inv_freq, persistent=False)
+            module.original_inv_freq = module.inv_freq
+            module.attention_scaling = attention_scaling
+        else:
+            dim = module.inv_freq.numel() * 2
+            inv_freq = 1.0 / (
+                10000.0
+                ** (torch.arange(0, dim, 2, dtype=torch.float, device=target_device) / dim)
+            )
+            module.register_buffer("inv_freq", inv_freq, persistent=False)
 
-        original_forward = attention_class.forward
 
-        def make_forward(original):
-            @wraps(original)
-            def forward(self, *args, attention_mask=None, **kwargs):
-                attention_module = sys.modules[self.__class__.__module__]
-                if (
-                    attention_mask is not None
-                    and not self.training
-                    and getattr(attention_module, "NPU_ATTN_INFR", False)
-                ):
-                    # The remote code inverts this again. Pre-inverting here
-                    # makes True mean "masked", as required by the Ascend op.
-                    attention_mask = ~attention_mask.bool()
-                return original(self, *args, attention_mask=attention_mask, **kwargs)
+def disable_openpangu_npu_fused_infer_attention(model) -> None:
+    """Keep OpenPangu language and vision eval/train on the same attention path.
 
-            return forward
+    The published remote code unconditionally selects
+    ``npu_fused_infer_attention_score`` in eval mode, even when the model was
+    loaded with ``attn_implementation="eager"``. Its output is not numerically
+    compatible with the eager path used during actor updates.
+    """
+    attention_modules = {
+        sys.modules[module.__class__.__module__]
+        for module in model.modules()
+        if module.__class__.__name__ in {"PanguEmbeddedAttention", "OpenPanguVLVisionAttention"}
+    }
+    for attention_module in attention_modules:
+        attention_module.NPU_ATTN_INFR = False
 
-        attention_class.forward = make_forward(original_forward)
-        attention_class._verl_npu_attention_mask_compat = True
+
+def patch_openpangu_npu_attention_mask(model) -> None:
+    """Backward-compatible alias for the original experimental patch name."""
+    disable_openpangu_npu_fused_infer_attention(model)
 
 
 __all__ = [
@@ -188,9 +199,11 @@ __all__ = [
     "OPENPANGU_MODEL_TYPE",
     "apply_openpangu_config_compat",
     "apply_openpangu_transformers_compat",
+    "disable_openpangu_npu_fused_infer_attention",
     "normalize_openpangu_processor_text",
     "normalize_openpangu_position_ids",
     "patch_openpangu_npu_attention_mask",
     "patch_openpangu_processor",
     "patch_openpangu_model_position_ids",
+    "reinitialize_openpangu_rotary_embeddings",
 ]

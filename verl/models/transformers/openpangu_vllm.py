@@ -69,7 +69,17 @@ def register() -> None:
 
     patch_openpangu_vllm_processing_info(openpangu_vl.OpenPanguVLProcessingInfo)
     if current_platform.device_type == "npu":
+        # OpenPangu's vision stack constructs ApplyRotaryEmb with
+        # enforce_enable=True. On Ascend this otherwise imports CUDA-only
+        # flash_attn.ops.triton even though the actual attention backend is NPU.
+        from verl.utils.vllm.npu_vllm_patch import patch_vllm013_rotary_emb
+
+        patch_vllm013_rotary_emb()
         patch_openpangu_vllm_vision_backend(openpangu_vl, AttentionBackendEnum.FLASH_ATTN)
 
 
-__all__ = ["patch_openpangu_vllm_processing_info", "patch_openpangu_vllm_vision_backend", "register"]
+__all__ = [
+    "patch_openpangu_vllm_processing_info",
+    "patch_openpangu_vllm_vision_backend",
+    "register",
+]

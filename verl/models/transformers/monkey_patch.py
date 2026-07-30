@@ -496,12 +496,14 @@ def apply_monkey_patch(
         return
     elif model.config.model_type == "openpangu_vl":
         from verl.models.transformers.openpangu_vl import (
+            disable_openpangu_npu_fused_infer_attention,
             patch_openpangu_model_position_ids,
-            patch_openpangu_npu_attention_mask,
+            reinitialize_openpangu_rotary_embeddings,
         )
 
         patch_openpangu_model_position_ids(model)
-        patch_openpangu_npu_attention_mask(model)
+        reinitialize_openpangu_rotary_embeddings(model)
+        disable_openpangu_npu_fused_infer_attention(model)
     elif model.config.model_type in ["qwen3_5", "qwen3_5_moe"]:
         # Step 1: patch model to support image-text mixed data
         from transformers.models.qwen3_5.modeling_qwen3_5 import (
