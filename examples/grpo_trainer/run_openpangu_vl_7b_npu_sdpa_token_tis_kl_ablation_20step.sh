@@ -51,5 +51,6 @@ exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu_sdpa_token_tis_20step.sh" \
     actor_rollout_ref.actor.use_kl_loss=True \
     actor_rollout_ref.actor.kl_loss_coef="${KL_LOSS_COEF}" \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
     algorithm.use_kl_in_reward=False \
     "$@"
