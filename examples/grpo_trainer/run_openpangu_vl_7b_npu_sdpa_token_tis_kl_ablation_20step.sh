@@ -33,6 +33,11 @@ export RESUME_MODE=resume_path
 export TEST_FREQ=${TEST_FREQ:-10}
 export SAVE_FREQ=${SAVE_FREQ:-10}
 
+# Short ablations are intentionally local-only: keep console/file logs without
+# creating or updating a Weights & Biases run.
+export TRAINER_LOGGER='["console"]'
+export WANDB_MODE=disabled
+
 export PROJECT_NAME=${PROJECT_NAME:-openpangu_vl_grpo_npu}
 export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_virl39k_sdpa_token_tis_${KL_TAG}_s350_s370}
 export LOG_DIR=${LOG_DIR:-/home/chentaoxu/data/openpangu-vl-npu/kl-ablation/${KL_TAG}}
