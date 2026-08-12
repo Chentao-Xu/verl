@@ -45,6 +45,13 @@ def parse_args() -> argparse.Namespace:
         "--actor-mxfp8-layer-range",
         help="Optional inclusive language layer range START:END; visual layers remain BF16.",
     )
+    parser.add_argument("--rollout-mxfp8", choices=("none", "weight_only", "w8a8"), default="none")
+    parser.add_argument(
+        "--rollout-mxfp8-scope",
+        choices=("all", "language_only", "visual_only"),
+        default="all",
+    )
+    parser.add_argument("--rollout-mxfp8-layer-range", help="Optional inclusive language layer range START:END.")
     parser.add_argument("--mean-threshold", type=float, default=0.01)
     parser.add_argument("--p95-threshold", type=float, default=0.05)
     parser.add_argument("--max-threshold", type=float, default=0.15)
@@ -89,6 +96,15 @@ def run_rollout(args: argparse.Namespace) -> None:
 
     from verl.utils import hf_processor
 
+    if args.rollout_mxfp8 != "none":
+        os.environ["VERL_VLLM_MXFP8_SIM_ENABLED"] = "1"
+        os.environ["VERL_MXFP8_SIM_MODE"] = args.rollout_mxfp8
+        os.environ["VERL_MXFP8_SIM_SCOPE"] = args.rollout_mxfp8_scope
+        os.environ["VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"] = args.rollout_mxfp8_layer_range or ""
+        from verl.utils.vllm.mxfp8_sim import apply_mxfp8_sim_patches
+
+        apply_mxfp8_sim_patches()
+
     processor = hf_processor(args.model_path, trust_remote_code=True, use_fast=True)
     sample, rendered, images = load_sample(args.dataset_path, processor, args.sample_index, args.text_only)
     llm = LLM(
@@ -127,6 +143,9 @@ def run_rollout(args: argparse.Namespace) -> None:
         "rollout_log_probs": rollout_log_probs,
         "text": candidate.text,
         "finish_reason": candidate.finish_reason,
+        "rollout_mxfp8": args.rollout_mxfp8,
+        "rollout_mxfp8_scope": args.rollout_mxfp8_scope,
+        "rollout_mxfp8_layer_range": args.rollout_mxfp8_layer_range,
     }
     path = Path(args.fixture_path)
     path.parent.mkdir(parents=True, exist_ok=True)
