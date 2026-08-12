@@ -170,7 +170,12 @@ class vLLMColocateWorkerExtension:
         # 2. patch online fp8 quant
         if os.environ.get("VERL_VLLM_FP8_QUANT_ENABLED", "0") == "1":
             apply_vllm_fp8_patches()
-        # 3. patch QAT (compressed-tensors NVFP4) for dynamic weight loading
+        # 3. patch NPU MXFP8 numerical simulation
+        if os.environ.get("VERL_VLLM_MXFP8_SIM_ENABLED", "0") == "1":
+            from verl.utils.vllm.mxfp8_sim import apply_mxfp8_sim_patches
+
+            apply_mxfp8_sim_patches()
+        # 4. patch QAT (compressed-tensors NVFP4) for dynamic weight loading
         vllm_config = kwargs.get("vllm_config")
         quant_config = getattr(vllm_config, "quant_config", None) if vllm_config else None
         _is_qat_model = getattr(quant_config, "quant_format", None) == "nvfp4-pack-quantized"
@@ -238,6 +243,10 @@ class vLLMColocateWorkerExtension:
             monkey_patch_compute_logits(model, vocab_size)
             # patch weight loader to support MoE model
             patch_vllm_moe_model_weight_loader(model)
+            if os.environ.get("VERL_VLLM_MXFP8_SIM_ENABLED", "0") == "1":
+                from verl.utils.vllm.mxfp8_sim import mark_mxfp8_sim_linears
+
+                mark_mxfp8_sim_linears(model)
 
     def update_weights_from_ipc(self, peft_config: dict = None, base_sync_done=False, use_shm: bool = False):
         """Update the weights of the rollout model."""
@@ -385,7 +394,12 @@ class vLLMColocateWorkerExtension:
                         self._weight_sync_loaded_params = set()
                     self._weight_sync_source_names.update(name for name, _ in param_updates)
                     for model_index, model in enumerate(self._iter_all_models()):
-                        loaded_params = model.load_weights(param_updates)
+                        weights_to_load = param_updates
+                        if os.environ.get("VERL_VLLM_MXFP8_SIM_ENABLED", "0") == "1":
+                            from verl.utils.vllm.mxfp8_sim import quant_dequant_weight_updates
+
+                            weights_to_load = quant_dequant_weight_updates(param_updates)
+                        loaded_params = model.load_weights(weights_to_load)
                         if model_index == 0 and loaded_params is not None:
                             self._weight_sync_loaded_params.update(loaded_params)
                 loaded_buffers = self._apply_buffer_updates_all_models(buffer_updates, named_buffers)

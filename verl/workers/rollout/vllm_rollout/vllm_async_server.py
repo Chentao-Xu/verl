@@ -914,11 +914,19 @@ class vLLMHttpServer:
             hf_overrides["quantization_config"] = quantization_config_dict
         elif quantization is not None:
             # Handle other quantization methods (fp8, torchao)
-            _SUPPORTED_QUANTIZATION = ["fp8", "torchao", "ascend"]
+            _SUPPORTED_QUANTIZATION = ["fp8", "torchao", "ascend", "mxfp8_sim"]
             if quantization not in _SUPPORTED_QUANTIZATION:
                 raise ValueError(f"Currently only support {_SUPPORTED_QUANTIZATION} quantization, got: {quantization}")
 
-            if quantization == "fp8":
+            if quantization == "mxfp8_sim":
+                if not is_torch_npu_available(check_device=False):
+                    raise RuntimeError("mxfp8_sim rollout is only available with torch_npu")
+                # Keep vLLM's model and GEMM in BF16. The worker extension
+                # injects quantize-dequantize rounding into weights/activations.
+                os.environ["VERL_VLLM_MXFP8_SIM_ENABLED"] = "1"
+                quantization = None
+                logger.warning("Enabled NPU MXFP8 numerical rollout simulation")
+            elif quantization == "fp8":
                 # Ignore MoE router layers for FP8 quantization
                 all_mlp_gate_layers = []
                 for layer in range(self.model_config.hf_config.num_hidden_layers):
