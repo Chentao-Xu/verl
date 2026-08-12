@@ -11,6 +11,11 @@ if [[ "${VERL_MXFP8_SIM_MODE}" != "weight_only" && "${VERL_MXFP8_SIM_MODE}" != "
     echo "VERL_MXFP8_SIM_MODE must be weight_only or w8a8" >&2
     exit 2
 fi
+export VERL_MXFP8_SIM_SCOPE=${VERL_MXFP8_SIM_SCOPE:-all}
+if [[ "${VERL_MXFP8_SIM_SCOPE}" != "all" && "${VERL_MXFP8_SIM_SCOPE}" != "language_only" && "${VERL_MXFP8_SIM_SCOPE}" != "visual_only" ]]; then
+    echo "VERL_MXFP8_SIM_SCOPE must be all, language_only, or visual_only" >&2
+    exit 2
+fi
 
 export TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-1}
 export MODEL_PATH=${MODEL_PATH:-/home/chentaoxu/data/models/openPangu-VL-7B}
@@ -35,7 +40,7 @@ export SAVE_FREQ=${SAVE_FREQ:--1}
 export LOG_VAL_GENERATIONS=${LOG_VAL_GENERATIONS:-8}
 export TRAINER_LOGGER=${TRAINER_LOGGER:-'["console"]'}
 export PROJECT_NAME=${PROJECT_NAME:-openpangu_vl_grpo_npu}
-export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_mxfp8_sim_${VERL_MXFP8_SIM_MODE}_${TOTAL_TRAINING_STEPS}step}
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_mxfp8_sim_${VERL_MXFP8_SIM_MODE}_${VERL_MXFP8_SIM_SCOPE}_${TOTAL_TRAINING_STEPS}step}
 export LOG_DIR=${LOG_DIR:-/home/chentaoxu/data/openpangu-vl-npu/mxfp8-sim-20260812/${EXPERIMENT_NAME}}
 export CHECKPOINT_DIR=${CHECKPOINT_DIR:-${LOG_DIR}/checkpoints}
 export VALIDATION_DATA_DIR=${VALIDATION_DATA_DIR:-${LOG_DIR}/generations}
@@ -55,7 +60,7 @@ fi
 
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}" "${VALIDATION_DATA_DIR}" "${RAY_TMPDIR}"
 git -C "${REPO_ROOT}" rev-parse HEAD | tee "${LOG_DIR}/git_head.txt"
-env | grep -E '^(VERL_MXFP8_SIM_MODE|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
+env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
     | sort | tee "${LOG_DIR}/experiment_env.txt"
 
 exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu.sh" \
