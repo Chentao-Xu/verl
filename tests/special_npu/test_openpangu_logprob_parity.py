@@ -96,13 +96,21 @@ def run_rollout(args: argparse.Namespace) -> None:
     # EngineCore process. Keep the tiny parity fixture in-process whenever the
     # MXFP8 simulator is requested so the patched loader is the one exercised.
     if args.rollout_mxfp8 != "none":
-        os.environ["VLLM_USE_V1"] = "0"
         os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     from vllm import LLM, SamplingParams
 
     from verl.utils import hf_processor
 
     if args.rollout_mxfp8 != "none":
+        # vLLM's logprob rank helper is torch.compile-decorated and currently
+        # probes CUDA capability even on NPU in this in-process test mode.
+        # Replace only this test helper with its original eager callable.
+        from vllm.v1.sample import sampler as sampler_module
+        from vllm.v1.sample.ops import logprobs as logprobs_ops
+
+        eager_count = logprobs_ops.batched_count_greater_than.__wrapped__
+        logprobs_ops.batched_count_greater_than = eager_count
+        sampler_module.batched_count_greater_than = eager_count
         os.environ["VERL_VLLM_MXFP8_SIM_ENABLED"] = "1"
         os.environ["VERL_MXFP8_SIM_MODE"] = args.rollout_mxfp8
         os.environ["VERL_MXFP8_SIM_SCOPE"] = args.rollout_mxfp8_scope
