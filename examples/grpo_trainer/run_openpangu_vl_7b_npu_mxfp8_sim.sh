@@ -56,6 +56,13 @@ export PYTHONPATH="${REPO_ROOT}:/home/chentaoxu/quant_dequant:${PYTHONPATH:-}"
 export LD_LIBRARY_PATH="/home/chentaoxu/quant_dequant/quant_cy_npu/cusrc:/usr/local/python3.11.15/lib/python3.11/site-packages/torch_npu/lib:/usr/local/python3.11.15/lib/python3.11/site-packages/torch/lib:${LD_LIBRARY_PATH:-}"
 export VERL_ROLLOUT_LOGPROB_CHECK=${VERL_ROLLOUT_LOGPROB_CHECK:-1}
 export VERL_WEIGHT_SYNC_AUDIT=${VERL_WEIGHT_SYNC_AUDIT:-1}
+# Current Ascend IPC bucket reuse corrupts generation after MXFP8 QDQ. SHM was
+# verified with identical sender/receiver SHA256 and is the safe simulator path.
+export VERL_FORCE_WEIGHT_SYNC_SHM=${VERL_FORCE_WEIGHT_SYNC_SHM:-1}
+if [[ "${VERL_FORCE_WEIGHT_SYNC_SHM}" != "0" && "${VERL_FORCE_WEIGHT_SYNC_SHM}" != "1" ]]; then
+    echo "VERL_FORCE_WEIGHT_SYNC_SHM must be 0 or 1" >&2
+    exit 2
+fi
 
 idle_npu_count="$(npu-smi info | grep -c "No running processes found in NPU" || true)"
 if [[ "${idle_npu_count}" -ne "${NDEVICES_PER_NODE}" ]]; then
@@ -66,7 +73,7 @@ fi
 
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}" "${VALIDATION_DATA_DIR}" "${RAY_TMPDIR}"
 git -C "${REPO_ROOT}" rev-parse HEAD | tee "${LOG_DIR}/git_head.txt"
-env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE|VERL_MXFP8_ACTOR_QAT|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
+env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE|VERL_MXFP8_ACTOR_QAT|VERL_FORCE_WEIGHT_SYNC_SHM|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
     | sort | tee "${LOG_DIR}/experiment_env.txt"
 
 actor_qat_args=()
