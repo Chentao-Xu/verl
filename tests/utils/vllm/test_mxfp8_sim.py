@@ -46,3 +46,15 @@ def test_should_honor_model_scope(monkeypatch, scope, language_expected, visual_
 
     assert should_quantize_source_weight("model.layers.0.self_attn.q_proj.weight", matrix) is language_expected
     assert should_quantize_source_weight("model.visual.blocks.0.attn.qkv.weight", matrix) is visual_expected
+
+
+def test_should_honor_language_layer_range(monkeypatch):
+    monkeypatch.setenv("VERL_MXFP8_SIM_SCOPE", "language_only")
+    monkeypatch.setenv("VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE", "3:7")
+    matrix = torch.empty(64, 32)
+
+    assert not should_quantize_source_weight("model.layers.2.self_attn.q_proj.weight", matrix)
+    assert should_quantize_source_weight("model.layers.3.self_attn.q_proj.weight", matrix)
+    assert should_quantize_source_weight("model.layers.7.mlp.down_proj.weight", matrix)
+    assert not should_quantize_source_weight("model.layers.8.mlp.down_proj.weight", matrix)
+    assert not should_quantize_source_weight("visual.blocks.3.attn.qkv.weight", matrix)

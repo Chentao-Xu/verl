@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 _ENABLED_ENV = "VERL_VLLM_MXFP8_SIM_ENABLED"
 _MODE_ENV = "VERL_MXFP8_SIM_MODE"
 _SCOPE_ENV = "VERL_MXFP8_SIM_SCOPE"
+_LANGUAGE_LAYER_RANGE_ENV = "VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"
 _VALID_MODES = {"weight_only", "w8a8"}
 _VALID_SCOPES = {"all", "language_only", "visual_only"}
 _ACTIVATION_MARKER = "_verl_mxfp8_simulate_activation"
@@ -75,14 +77,32 @@ def _is_visual_name(name: str) -> bool:
     return lowered.startswith("visual.") or ".visual." in lowered
 
 
+def _in_language_layer_range(name: str) -> bool:
+    value = os.environ.get(_LANGUAGE_LAYER_RANGE_ENV, "").strip()
+    if not value:
+        return True
+
+    match = re.search(r"(?:^|\.)layers\.(\d+)(?:\.|$)", name.lower())
+    if match is None:
+        return False
+    try:
+        start_text, end_text = value.split(":", maxsplit=1)
+        start, end = int(start_text), int(end_text)
+    except ValueError as exc:
+        raise ValueError(f"{_LANGUAGE_LAYER_RANGE_ENV} must be START:END, got {value!r}") from exc
+    if start < 0 or end < start:
+        raise ValueError(f"{_LANGUAGE_LAYER_RANGE_ENV} must satisfy 0 <= START <= END, got {value!r}")
+    return start <= int(match.group(1)) <= end
+
+
 def _in_simulation_scope(name: str) -> bool:
     scope = get_mxfp8_sim_scope()
     is_visual = _is_visual_name(name)
     if scope == "language_only":
-        return not is_visual
+        return not is_visual and _in_language_layer_range(name)
     if scope == "visual_only":
         return is_visual
-    return True
+    return is_visual or _in_language_layer_range(name)
 
 
 def should_quantize_source_weight(name: str, tensor: torch.Tensor) -> bool:
