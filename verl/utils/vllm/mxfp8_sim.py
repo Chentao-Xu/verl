@@ -167,6 +167,14 @@ def quant_dequant_weight_updates(
                 _stats.weight_elements += tensor.numel()
             yield name, tensor
     finally:
+        quantized_tensors = _stats.weight_tensors - before_tensors
+        # Dynamic weight sync receives views into a sender-owned, reusable IPC
+        # bucket. quant_dequant_float launches asynchronously, so the sender
+        # could overwrite that bucket before the NPU has consumed its input.
+        # Finish both QDQ and the downstream vLLM copy before returning from
+        # this bucket's model.load_weights call.
+        if quantized_tensors:
+            torch.npu.synchronize()
         if source_name_examples:
             audit_group = "visual" if _is_visual_name(source_name_examples[0]) else "non_visual"
             if audit_group not in _source_name_audit_groups:
@@ -174,7 +182,7 @@ def quant_dequant_weight_updates(
                 _source_name_audit_groups.add(audit_group)
         logger.warning(
             "MXFP8 simulation quantized %d weight tensors (%d elements) for this reload",
-            _stats.weight_tensors - before_tensors,
+            quantized_tensors,
             _stats.weight_elements - before_elements,
         )
 
