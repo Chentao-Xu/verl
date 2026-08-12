@@ -214,9 +214,10 @@ def apply_mxfp8_sim_patches() -> None:
     UnquantizedLinearMethod.apply = _patched_apply
     _linear_patch_applied = True
     logger.warning(
-        "Applied MXFP8 simulation patch (mode=%s, scope=%s)",
+        "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s)",
         get_mxfp8_sim_mode(),
         get_mxfp8_sim_scope(),
+        os.environ.get(_LANGUAGE_LAYER_RANGE_ENV, ""),
     )
 
 
