@@ -96,6 +96,7 @@ def run_rollout(args: argparse.Namespace) -> None:
     # EngineCore process. Keep the tiny parity fixture in-process whenever the
     # MXFP8 simulator is requested so the patched loader is the one exercised.
     if args.rollout_mxfp8 != "none":
+        os.environ["VLLM_USE_V1"] = "0"
         os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     from vllm import LLM, SamplingParams
 
