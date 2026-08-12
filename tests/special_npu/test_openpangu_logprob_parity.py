@@ -92,6 +92,11 @@ def load_sample(dataset_path: str, processor, index: int, text_only: bool = Fals
 
 
 def run_rollout(args: argparse.Namespace) -> None:
+    # Python loader monkey patches do not propagate into the spawned V1
+    # EngineCore process. Keep the tiny parity fixture in-process whenever the
+    # MXFP8 simulator is requested so the patched loader is the one exercised.
+    if args.rollout_mxfp8 != "none":
+        os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
     from vllm import LLM, SamplingParams
 
     from verl.utils import hf_processor
