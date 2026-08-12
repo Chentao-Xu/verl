@@ -151,9 +151,7 @@ class FSDPEngine(BaseEngine):
         # QAT (Quantization-Aware Training)
         self._qat_config = getattr(self.engine_config, "qat", None)
         self._qat_enabled = self._qat_config is not None and getattr(self._qat_config, "enable", False)
-        # MXFP8 simulation keeps the synchronized tensors in BF16 here. The
-        # vLLM worker applies the same NPU QDQ while loading each update.
-        if self._qat_enabled and not self._qat_config.mode.startswith("mxfp8_"):
+        if self._qat_enabled:
             logger.info(f"QAT enabled: mode={self._qat_config.mode}, group_size={self._qat_config.group_size}")
 
         if self.engine_config.entropy_from_logits_with_chunking:
@@ -870,7 +868,9 @@ class FSDPEngine(BaseEngine):
                 for name, param in params.items()
             )
 
-        if self._qat_enabled:
+        # MXFP8 simulation keeps synchronized tensors in BF16 here. The vLLM
+        # worker applies the matching NPU QDQ while loading each update.
+        if self._qat_enabled and not self._qat_config.mode.startswith("mxfp8_"):
             from verl.utils.qat.quantizer import QATQuantizer
             from verl.utils.torch_dtypes import PrecisionType
 
