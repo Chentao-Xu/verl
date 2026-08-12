@@ -53,6 +53,7 @@ _stats = MXFP8SimStats()
 _linear_patch_applied = False
 _original_unquantized_linear_apply = None
 _original_default_loader_get_all_weights = None
+_original_default_loader_load_weights = None
 _source_name_audit_groups: set[str] = set()
 
 
@@ -203,7 +204,8 @@ def mark_mxfp8_sim_linears(model: torch.nn.Module) -> int:
 
 def apply_mxfp8_sim_patches() -> None:
     """Patch vLLM checkpoint loading and optional Linear activation QDQ."""
-    global _linear_patch_applied, _original_default_loader_get_all_weights, _original_unquantized_linear_apply
+    global _linear_patch_applied, _original_default_loader_get_all_weights
+    global _original_default_loader_load_weights, _original_unquantized_linear_apply
     if _linear_patch_applied:
         return
 
@@ -230,6 +232,16 @@ def apply_mxfp8_sim_patches() -> None:
 
     _original_default_loader_get_all_weights = original_get_all_weights
     DefaultModelLoader.get_all_weights = _patched_get_all_weights
+
+    original_load_weights = DefaultModelLoader.load_weights
+
+    def _patched_load_weights(self, model, model_config):
+        result = original_load_weights(self, model, model_config)
+        mark_mxfp8_sim_linears(model)
+        return result
+
+    _original_default_loader_load_weights = original_load_weights
+    DefaultModelLoader.load_weights = _patched_load_weights
     _linear_patch_applied = True
     logger.warning(
         "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s)",
