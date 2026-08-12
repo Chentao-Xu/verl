@@ -52,6 +52,7 @@ class MXFP8SimStats:
 _stats = MXFP8SimStats()
 _linear_patch_applied = False
 _original_unquantized_linear_apply = None
+_original_default_loader_get_all_weights = None
 _source_name_audit_groups: set[str] = set()
 
 
@@ -136,7 +137,14 @@ def _quant_dequant_last_dim(tensor: torch.Tensor) -> torch.Tensor:
         ) from exc
 
     qtype = QType("mxfp8e4m3").dim_(-1)
-    return quant_dequant_float(tensor, qtype, force_py=False)
+    if tensor.device.type == "npu":
+        return quant_dequant_float(tensor, qtype, force_py=False)
+
+    # DefaultModelLoader streams checkpoint tensors from CPU. Stage one tensor
+    # at a time through the active NPU because quant_cy_npu has no CPU kernel.
+    staged = tensor.to("npu")
+    quantized = quant_dequant_float(staged, qtype, force_py=False)
+    return quantized.to(tensor.device)
 
 
 @torch.no_grad()
@@ -194,12 +202,13 @@ def mark_mxfp8_sim_linears(model: torch.nn.Module) -> int:
 
 
 def apply_mxfp8_sim_patches() -> None:
-    """Patch unquantized vLLM Linear apply with optional activation QDQ."""
-    global _linear_patch_applied, _original_unquantized_linear_apply
+    """Patch vLLM checkpoint loading and optional Linear activation QDQ."""
+    global _linear_patch_applied, _original_default_loader_get_all_weights, _original_unquantized_linear_apply
     if _linear_patch_applied:
         return
 
     from vllm.model_executor.layers.linear import UnquantizedLinearMethod
+    from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
 
     original_apply = UnquantizedLinearMethod.apply
 
@@ -212,6 +221,15 @@ def apply_mxfp8_sim_patches() -> None:
 
     _original_unquantized_linear_apply = original_apply
     UnquantizedLinearMethod.apply = _patched_apply
+
+    original_get_all_weights = DefaultModelLoader.get_all_weights
+
+    def _patched_get_all_weights(self, model_config, model):
+        weights = original_get_all_weights(self, model_config, model)
+        return quant_dequant_weight_updates(weights)
+
+    _original_default_loader_get_all_weights = original_get_all_weights
+    DefaultModelLoader.get_all_weights = _patched_get_all_weights
     _linear_patch_applied = True
     logger.warning(
         "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s)",
