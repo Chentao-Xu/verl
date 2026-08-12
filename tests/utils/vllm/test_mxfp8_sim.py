@@ -4,6 +4,14 @@ import torch
 from verl.utils.vllm.mxfp8_sim import should_quantize_source_weight
 
 
+def test_mxfp8_qat_modes_are_registered():
+    pytest.importorskip("triton")
+    from verl.utils.qat.linear import QATMode
+
+    assert QATMode("mxfp8_w8a16") is QATMode.MXFP8_W8A16
+    assert QATMode("mxfp8_w8a8") is QATMode.MXFP8_W8A8
+
+
 def test_should_quantize_openpangu_linear_weights(monkeypatch):
     monkeypatch.setenv("VERL_MXFP8_SIM_SCOPE", "all")
     matrix = torch.empty(64, 32)

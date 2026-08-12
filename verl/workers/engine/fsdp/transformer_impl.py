@@ -151,7 +151,9 @@ class FSDPEngine(BaseEngine):
         # QAT (Quantization-Aware Training)
         self._qat_config = getattr(self.engine_config, "qat", None)
         self._qat_enabled = self._qat_config is not None and getattr(self._qat_config, "enable", False)
-        if self._qat_enabled:
+        # MXFP8 simulation keeps the synchronized tensors in BF16 here. The
+        # vLLM worker applies the same NPU QDQ while loading each update.
+        if self._qat_enabled and not self._qat_config.mode.startswith("mxfp8_"):
             logger.info(f"QAT enabled: mode={self._qat_config.mode}, group_size={self._qat_config.group_size}")
 
         if self.engine_config.entropy_from_logits_with_chunking:

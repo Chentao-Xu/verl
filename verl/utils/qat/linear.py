@@ -185,11 +185,31 @@ class STEFP4QuantTriton(torch.autograd.Function):
         return grad_output, None, None
 
 
+class STEMXFP8QuantNPU(torch.autograd.Function):
+    """NPU MXFP8 QDQ in forward with a straight-through backward."""
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        if x.device.type != "npu":
+            raise RuntimeError(f"MXFP8 QAT simulation requires an NPU tensor, got {x.device}")
+
+        from quant_cy_npu.QTensor import quant_dequant_float
+        from quant_cy_npu.QType import QType
+
+        return quant_dequant_float(x, QType("mxfp8e4m3").dim_(-1), force_py=False)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> tuple:
+        return (grad_output,)
+
+
 class QATMode(str, Enum):
     """QAT quantization mode."""
 
     W4A4 = "w4a4"  # Weight 4-bit, Activation 4-bit (dynamic)
     W4A16 = "w4a16"  # Weight 4-bit, Activation 16-bit (weight only)
+    MXFP8_W8A16 = "mxfp8_w8a16"  # NPU MXFP8 weight QDQ, BF16 activation
+    MXFP8_W8A8 = "mxfp8_w8a8"  # NPU MXFP8 weight and activation QDQ
 
 
 class QATLinear(nn.Linear):
@@ -255,9 +275,15 @@ class QATLinear(nn.Linear):
         )
 
         if linear.weight.device != torch.device("meta"):
-            new_linear.weight = nn.Parameter(linear.weight.clone())
+            new_linear.weight = nn.Parameter(
+                linear.weight.clone(),
+                requires_grad=linear.weight.requires_grad,
+            )
             if has_bias:
-                new_linear.bias = nn.Parameter(linear.bias.clone())
+                new_linear.bias = nn.Parameter(
+                    linear.bias.clone(),
+                    requires_grad=linear.bias.requires_grad,
+                )
 
         return new_linear
 
@@ -309,6 +335,9 @@ class QATLinear(nn.Linear):
 
     def _fake_quantize_weight(self, weight: torch.Tensor) -> torch.Tensor:
         """Apply fake quantization to weight tensor using Triton kernel."""
+        if self.mode in (QATMode.MXFP8_W8A16, QATMode.MXFP8_W8A8):
+            return STEMXFP8QuantNPU.apply(weight)
+
         with torch.no_grad():
             if self._cached_weight_amax is not None:
                 global_amax = self._cached_weight_amax
@@ -346,6 +375,9 @@ class QATLinear(nn.Linear):
 
     def _fake_quantize_activation(self, x: torch.Tensor) -> torch.Tensor:
         """Apply fake quantization to activation tensor (W4A4 mode only)."""
+        if self.mode == QATMode.MXFP8_W8A8:
+            return STEMXFP8QuantNPU.apply(x)
+
         original_shape = x.shape
 
         if x.dim() == 3:
@@ -370,7 +402,7 @@ class QATLinear(nn.Linear):
 
         weight_fq = self._fake_quantize_weight(self.weight)
 
-        if self.mode == QATMode.W4A4:
+        if self.mode in (QATMode.W4A4, QATMode.MXFP8_W8A8):
             x_fq = self._fake_quantize_activation(x)
         else:
             x_fq = x
