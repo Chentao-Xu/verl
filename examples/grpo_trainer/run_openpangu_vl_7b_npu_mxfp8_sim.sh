@@ -75,11 +75,40 @@ if [[ "${VERL_MXFP8_ACTOR_QAT}" == "1" ]]; then
     if [[ "${VERL_MXFP8_SIM_MODE}" == "w8a8" ]]; then
         actor_qat_mode=mxfp8_w8a8
     fi
+    actor_qat_ignore_patterns='["lm_head","embed_tokens"]'
+    case "${VERL_MXFP8_SIM_SCOPE}" in
+        language_only)
+            actor_qat_ignore_patterns='["lm_head","embed_tokens","visual"]'
+            ;;
+        visual_only)
+            actor_qat_ignore_patterns='["lm_head","embed_tokens","language_model"]'
+            ;;
+    esac
+    if [[ -n "${VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE}" ]]; then
+        IFS=: read -r layer_start layer_end <<< "${VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE}"
+        if [[ ! "${layer_start}" =~ ^[0-9]+$ || ! "${layer_end}" =~ ^[0-9]+$ || "${layer_start}" -gt "${layer_end}" ]]; then
+            echo "VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE must be START:END with START <= END" >&2
+            exit 2
+        fi
+        layer_alternation=""
+        for ((layer = layer_start; layer <= layer_end; layer++)); do
+            layer_alternation+="${layer_alternation:+|}${layer}"
+        done
+        language_exclusion="re:^model\\.language_model\\.layers\\.(?!(?:${layer_alternation})\\.)"
+        case "${VERL_MXFP8_SIM_SCOPE}" in
+            all)
+                actor_qat_ignore_patterns="[\"lm_head\",\"embed_tokens\",\"${language_exclusion}\"]"
+                ;;
+            language_only)
+                actor_qat_ignore_patterns="[\"lm_head\",\"embed_tokens\",\"visual\",\"${language_exclusion}\"]"
+                ;;
+        esac
+    fi
     actor_qat_args+=(
         actor_rollout_ref.actor.fsdp_config.qat.enable=True
         actor_rollout_ref.actor.fsdp_config.qat.mode="${actor_qat_mode}"
         actor_rollout_ref.actor.fsdp_config.qat.group_size=32
-        'actor_rollout_ref.actor.fsdp_config.qat.ignore_patterns=["lm_head","embed_tokens"]'
+        actor_rollout_ref.actor.fsdp_config.qat.ignore_patterns="${actor_qat_ignore_patterns}"
         actor_rollout_ref.rollout.qat=null
     )
 fi
