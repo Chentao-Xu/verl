@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 
 _ENABLED_ENV = "VERL_VLLM_MXFP8_SIM_ENABLED"
 _MODE_ENV = "VERL_MXFP8_SIM_MODE"
+_SCOPE_ENV = "VERL_MXFP8_SIM_SCOPE"
 _VALID_MODES = {"weight_only", "w8a8"}
+_VALID_SCOPES = {"all", "language_only", "visual_only"}
 _ACTIVATION_MARKER = "_verl_mxfp8_simulate_activation"
 
 
@@ -61,9 +63,34 @@ def get_mxfp8_sim_mode() -> str:
     return mode
 
 
+def get_mxfp8_sim_scope() -> str:
+    scope = os.environ.get(_SCOPE_ENV, "all").lower()
+    if scope not in _VALID_SCOPES:
+        raise ValueError(f"{_SCOPE_ENV} must be one of {sorted(_VALID_SCOPES)}, got {scope!r}")
+    return scope
+
+
+def _is_visual_name(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith("visual.") or ".visual." in lowered
+
+
+def _in_simulation_scope(name: str) -> bool:
+    scope = get_mxfp8_sim_scope()
+    is_visual = _is_visual_name(name)
+    if scope == "language_only":
+        return not is_visual
+    if scope == "visual_only":
+        return is_visual
+    return True
+
+
 def should_quantize_source_weight(name: str, tensor: torch.Tensor) -> bool:
     """Select logical Linear weights before vLLM packing/sharding."""
     if not name.endswith(".weight") or tensor.ndim != 2:
+        return False
+
+    if not _in_simulation_scope(name):
         return False
 
     lowered = name.lower()
@@ -125,10 +152,14 @@ def mark_mxfp8_sim_linears(model: torch.nn.Module) -> int:
 
     marked = 0
     for name, module in model.named_modules():
-        if isinstance(module, LinearBase) and "lm_head" not in name.lower():
+        if isinstance(module, LinearBase) and "lm_head" not in name.lower() and _in_simulation_scope(name):
             setattr(module, _ACTIVATION_MARKER, True)
             marked += 1
-    logger.warning("MXFP8 simulation marked %d Linear layers for activation QDQ", marked)
+    logger.warning(
+        "MXFP8 simulation marked %d Linear layers for activation QDQ (scope=%s)",
+        marked,
+        get_mxfp8_sim_scope(),
+    )
     return marked
 
 
@@ -152,7 +183,11 @@ def apply_mxfp8_sim_patches() -> None:
     _original_unquantized_linear_apply = original_apply
     UnquantizedLinearMethod.apply = _patched_apply
     _linear_patch_applied = True
-    logger.warning("Applied MXFP8 simulation patch (mode=%s)", get_mxfp8_sim_mode())
+    logger.warning(
+        "Applied MXFP8 simulation patch (mode=%s, scope=%s)",
+        get_mxfp8_sim_mode(),
+        get_mxfp8_sim_scope(),
+    )
 
 
 def get_mxfp8_sim_stats() -> MXFP8SimStats:
@@ -162,6 +197,7 @@ def get_mxfp8_sim_stats() -> MXFP8SimStats:
 __all__ = [
     "apply_mxfp8_sim_patches",
     "get_mxfp8_sim_mode",
+    "get_mxfp8_sim_scope",
     "get_mxfp8_sim_stats",
     "is_mxfp8_sim_enabled",
     "mark_mxfp8_sim_linears",
