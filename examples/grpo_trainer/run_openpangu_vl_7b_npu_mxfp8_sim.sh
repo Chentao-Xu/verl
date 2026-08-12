@@ -16,6 +16,11 @@ if [[ "${VERL_MXFP8_SIM_SCOPE}" != "all" && "${VERL_MXFP8_SIM_SCOPE}" != "langua
     echo "VERL_MXFP8_SIM_SCOPE must be all, language_only, or visual_only" >&2
     exit 2
 fi
+export VERL_MXFP8_ACTOR_QAT=${VERL_MXFP8_ACTOR_QAT:-0}
+if [[ "${VERL_MXFP8_ACTOR_QAT}" != "0" && "${VERL_MXFP8_ACTOR_QAT}" != "1" ]]; then
+    echo "VERL_MXFP8_ACTOR_QAT must be 0 or 1" >&2
+    exit 2
+fi
 
 export TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-1}
 export MODEL_PATH=${MODEL_PATH:-/home/chentaoxu/data/models/openPangu-VL-7B}
@@ -60,8 +65,23 @@ fi
 
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}" "${VALIDATION_DATA_DIR}" "${RAY_TMPDIR}"
 git -C "${REPO_ROOT}" rev-parse HEAD | tee "${LOG_DIR}/git_head.txt"
-env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
+env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|VERL_MXFP8_ACTOR_QAT|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
     | sort | tee "${LOG_DIR}/experiment_env.txt"
+
+actor_qat_args=()
+if [[ "${VERL_MXFP8_ACTOR_QAT}" == "1" ]]; then
+    actor_qat_mode=mxfp8_w8a16
+    if [[ "${VERL_MXFP8_SIM_MODE}" == "w8a8" ]]; then
+        actor_qat_mode=mxfp8_w8a8
+    fi
+    actor_qat_args+=(
+        actor_rollout_ref.actor.fsdp_config.qat.enable=True
+        actor_rollout_ref.actor.fsdp_config.qat.mode="${actor_qat_mode}"
+        actor_rollout_ref.actor.fsdp_config.qat.group_size=32
+        'actor_rollout_ref.actor.fsdp_config.qat.ignore_patterns=["lm_head","embed_tokens"]'
+        actor_rollout_ref.rollout.qat=null
+    )
+fi
 
 exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu.sh" \
     data.shuffle=True \
@@ -77,4 +97,5 @@ exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu.sh" \
     algorithm.rollout_correction.rollout_rs=null \
     algorithm.rollout_correction.rollout_rs_threshold=null \
     algorithm.rollout_correction.bypass_mode=False \
+    "${actor_qat_args[@]}" \
     "$@"
