@@ -40,6 +40,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--text-only", action="store_true")
     parser.add_argument("--actor-attention", choices=("eager", "sdpa", "fused-infer"), default="eager")
     parser.add_argument("--actor-position-ids", choices=("processor", "model-default"), default="processor")
+    parser.add_argument("--actor-mxfp8", choices=("none", "weight_only", "w8a8"), default="none")
+    parser.add_argument(
+        "--actor-mxfp8-layer-range",
+        help="Optional inclusive language layer range START:END; visual layers remain BF16.",
+    )
     parser.add_argument("--mean-threshold", type=float, default=0.01)
     parser.add_argument("--p95-threshold", type=float, default=0.05)
     parser.add_argument("--max-threshold", type=float, default=0.15)
@@ -240,6 +245,36 @@ def run_actor(args: argparse.Namespace) -> None:
     if any(loading_info[key] for key in ("missing_keys", "unexpected_keys", "mismatched_keys")):
         raise AssertionError(f"Weight loading issues: {loading_info}")
     apply_monkey_patch(model=model, use_remove_padding=False)
+    if args.actor_mxfp8 != "none":
+        from verl.utils.qat.core import apply_qat
+
+        qat_mode = "mxfp8_w8a16" if args.actor_mxfp8 == "weight_only" else "mxfp8_w8a8"
+        ignore_patterns = ["lm_head", "embed_tokens"]
+        if args.actor_mxfp8_layer_range:
+            try:
+                start_text, end_text = args.actor_mxfp8_layer_range.split(":", maxsplit=1)
+                start, end = int(start_text), int(end_text)
+            except ValueError as exc:
+                raise ValueError("--actor-mxfp8-layer-range must be START:END") from exc
+            if start < 0 or end < start:
+                raise ValueError("--actor-mxfp8-layer-range must satisfy 0 <= START <= END")
+            layers = "|".join(str(layer) for layer in range(start, end + 1))
+            ignore_patterns.extend(
+                [
+                    "re:^(?!model\\.language_model\\.layers\\.(?:" + layers + ")\\.)",
+                    "visual",
+                ]
+            )
+        model = apply_qat(
+            model,
+            {
+                "enable": True,
+                "mode": qat_mode,
+                "group_size": 32,
+                "ignore_patterns": ignore_patterns,
+                "activation_observer": "static_minmax",
+            },
+        )
     if args.actor_attention == "fused-infer":
         for module in model.modules():
             if module.__class__.__name__ in {"PanguEmbeddedAttention", "OpenPanguVLVisionAttention"}:
@@ -258,6 +293,8 @@ def run_actor(args: argparse.Namespace) -> None:
         "tokens": diff.numel(),
         "actor_attention": args.actor_attention,
         "actor_position_ids": args.actor_position_ids,
+        "actor_mxfp8": args.actor_mxfp8,
+        "actor_mxfp8_layer_range": args.actor_mxfp8_layer_range,
         "mean_abs_logprob_diff": diff.mean().item(),
         "p95_abs_logprob_diff": torch.quantile(diff, 0.95).item(),
         "max_abs_logprob_diff": diff.max().item(),
