@@ -52,7 +52,7 @@ class MXFP8SimStats:
 _stats = MXFP8SimStats()
 _linear_patch_applied = False
 _original_unquantized_linear_apply = None
-_source_name_audit_logged = False
+_source_name_audit_groups: set[str] = set()
 
 
 def is_mxfp8_sim_enabled() -> bool:
@@ -144,7 +144,7 @@ def quant_dequant_weight_updates(
     weights: Iterable[tuple[str, torch.Tensor]],
 ) -> Iterator[tuple[str, torch.Tensor]]:
     """Apply MXFP8 QDQ to logical Linear source weights lazily."""
-    global _source_name_audit_logged
+    global _source_name_audit_groups
     before_tensors = _stats.weight_tensors
     before_elements = _stats.weight_elements
     source_name_examples = []
@@ -158,9 +158,11 @@ def quant_dequant_weight_updates(
                 _stats.weight_elements += tensor.numel()
             yield name, tensor
     finally:
-        if source_name_examples and not _source_name_audit_logged:
-            logger.warning("MXFP8 source weight name examples: %s", source_name_examples)
-            _source_name_audit_logged = True
+        if source_name_examples:
+            audit_group = "visual" if _is_visual_name(source_name_examples[0]) else "non_visual"
+            if audit_group not in _source_name_audit_groups:
+                logger.warning("MXFP8 %s source weight name examples: %s", audit_group, source_name_examples)
+                _source_name_audit_groups.add(audit_group)
         logger.warning(
             "MXFP8 simulation quantized %d weight tensors (%d elements) for this reload",
             _stats.weight_tensors - before_tensors,
