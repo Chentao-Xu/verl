@@ -22,6 +22,9 @@ MAX_MODEL_LENGTH=${MAX_MODEL_LENGTH:-2048}
 PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-4096}
 ACTOR_ATTN_IMPLEMENTATION=${ACTOR_ATTN_IMPLEMENTATION:-sdpa}
 FSDP_CPU_OFFLOAD_POLICY=${FSDP_CPU_OFFLOAD_POLICY:-False}
+USE_KL_LOSS=${USE_KL_LOSS:-True}
+KL_LOSS_COEF=${KL_LOSS_COEF:-0.01}
+KL_LOSS_TYPE=${KL_LOSS_TYPE:-low_var_kl}
 
 if ((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH > MAX_MODEL_LENGTH)); then
     echo "MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH must not exceed MAX_MODEL_LENGTH" >&2
@@ -93,7 +96,9 @@ ACTOR=(
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
     actor_rollout_ref.actor.use_dynamic_bsz=False
     actor_rollout_ref.actor.ppo_max_token_len_per_gpu=${PPO_MAX_TOKEN_LEN_PER_GPU}
-    actor_rollout_ref.actor.use_kl_loss=False
+    actor_rollout_ref.actor.use_kl_loss=${USE_KL_LOSS}
+    actor_rollout_ref.actor.kl_loss_coef=${KL_LOSS_COEF}
+    actor_rollout_ref.actor.kl_loss_type=${KL_LOSS_TYPE}
     actor_rollout_ref.actor.entropy_coeff=0
     actor_rollout_ref.actor.use_torch_compile=False
     actor_rollout_ref.actor.fsdp_config.fsdp_size=${NDEVICES_PER_NODE}
