@@ -25,6 +25,7 @@ FSDP_CPU_OFFLOAD_POLICY=${FSDP_CPU_OFFLOAD_POLICY:-False}
 USE_KL_LOSS=${USE_KL_LOSS:-True}
 KL_LOSS_COEF=${KL_LOSS_COEF:-0.01}
 KL_LOSS_TYPE=${KL_LOSS_TYPE:-low_var_kl}
+REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU=${REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU:-1}
 
 if ((MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH > MAX_MODEL_LENGTH)); then
     echo "MAX_PROMPT_LENGTH + MAX_RESPONSE_LENGTH must not exceed MAX_MODEL_LENGTH" >&2
@@ -108,6 +109,10 @@ ACTOR=(
     actor_rollout_ref.actor.fsdp_config.optimizer_offload=True
 )
 
+REF=(
+    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=${REF_LOG_PROB_MICRO_BATCH_SIZE_PER_GPU}
+)
+
 ROLLOUT=(
     actor_rollout_ref.rollout.name=vllm
     actor_rollout_ref.rollout.mode=async
@@ -160,6 +165,7 @@ python3 -m verl.trainer.main_ppo \
     "${DATA[@]}" \
     "${MODEL[@]}" \
     "${ACTOR[@]}" \
+    "${REF[@]}" \
     "${ROLLOUT[@]}" \
     "${TRAINER[@]}" \
     "$@" 2>&1 | tee "${LOG_DIR}/${EXPERIMENT_NAME}.log"
