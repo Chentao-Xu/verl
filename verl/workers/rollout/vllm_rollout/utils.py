@@ -244,9 +244,10 @@ class vLLMColocateWorkerExtension:
             # patch weight loader to support MoE model
             patch_vllm_moe_model_weight_loader(model)
             if os.environ.get("VERL_VLLM_MXFP8_SIM_ENABLED", "0") == "1":
-                from verl.utils.vllm.mxfp8_sim import mark_mxfp8_sim_linears
+                from verl.utils.vllm.mxfp8_sim import mark_mxfp8_sim_linears, patch_mxfp8_sim_linear_forwards
 
                 mark_mxfp8_sim_linears(model)
+                patch_mxfp8_sim_linear_forwards(model)
 
     def update_weights_from_ipc(self, peft_config: dict = None, base_sync_done=False, use_shm: bool = False):
         """Update the weights of the rollout model."""
