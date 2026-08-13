@@ -36,9 +36,14 @@ _ENABLED_ENV = "VERL_VLLM_MXFP8_SIM_ENABLED"
 _MODE_ENV = "VERL_MXFP8_SIM_MODE"
 _SCOPE_ENV = "VERL_MXFP8_SIM_SCOPE"
 _LANGUAGE_LAYER_RANGE_ENV = "VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"
+_ACTIVATION_HOOK_ENV = "VERL_MXFP8_SIM_ACTIVATION_HOOK"
+_ACTIVATION_GROUPS_ENV = "VERL_MXFP8_SIM_ACTIVATION_GROUPS"
 _VALID_MODES = {"weight_only", "w8a8"}
 _VALID_SCOPES = {"all", "language_only", "visual_only"}
+_VALID_ACTIVATION_HOOKS = {"apply", "forward"}
+_VALID_ACTIVATION_GROUPS = {"qkv", "o", "gate_up", "down", "other"}
 _ACTIVATION_MARKER = "_verl_mxfp8_simulate_activation"
+_ACTIVATION_NAME = "_verl_mxfp8_sim_module_name"
 
 
 @dataclass
@@ -47,6 +52,7 @@ class MXFP8SimStats:
     weight_elements: int = 0
     activation_calls: int = 0
     activation_elements: int = 0
+    activation_calls_by_group: dict[str, int] | None = None
 
 
 _stats = MXFP8SimStats()
@@ -73,6 +79,54 @@ def get_mxfp8_sim_scope() -> str:
     if scope not in _VALID_SCOPES:
         raise ValueError(f"{_SCOPE_ENV} must be one of {sorted(_VALID_SCOPES)}, got {scope!r}")
     return scope
+
+
+def get_mxfp8_activation_hook() -> str:
+    hook = os.environ.get(_ACTIVATION_HOOK_ENV, "apply").lower()
+    if hook not in _VALID_ACTIVATION_HOOKS:
+        raise ValueError(f"{_ACTIVATION_HOOK_ENV} must be one of {sorted(_VALID_ACTIVATION_HOOKS)}, got {hook!r}")
+    return hook
+
+
+def get_mxfp8_activation_groups() -> set[str]:
+    value = os.environ.get(_ACTIVATION_GROUPS_ENV, "all").strip().lower()
+    if value in {"", "all"}:
+        return set(_VALID_ACTIVATION_GROUPS)
+    groups = {item.strip() for item in value.split(",") if item.strip()}
+    invalid = groups - _VALID_ACTIVATION_GROUPS
+    if invalid:
+        raise ValueError(
+            f"{_ACTIVATION_GROUPS_ENV} contains unsupported groups {sorted(invalid)}; "
+            f"valid groups are {sorted(_VALID_ACTIVATION_GROUPS)}"
+        )
+    return groups
+
+
+def classify_mxfp8_activation_module(name: str) -> str:
+    lowered = name.lower()
+    leaf = lowered.rsplit(".", maxsplit=1)[-1]
+    if leaf in {"qkv_proj", "q_proj", "k_proj", "v_proj"}:
+        return "qkv"
+    if leaf in {"o_proj", "out_proj"}:
+        return "o"
+    if leaf in {"gate_up_proj", "gate_proj", "up_proj"}:
+        return "gate_up"
+    if leaf == "down_proj":
+        return "down"
+    return "other"
+
+
+def should_quantize_activation_module(name: str) -> bool:
+    return _in_simulation_scope(name) and classify_mxfp8_activation_module(name) in get_mxfp8_activation_groups()
+
+
+def _record_activation_qdq(name: str, tensor: torch.Tensor) -> None:
+    group = classify_mxfp8_activation_module(name)
+    if _stats.activation_calls_by_group is None:
+        _stats.activation_calls_by_group = {}
+    _stats.activation_calls += 1
+    _stats.activation_elements += tensor.numel()
+    _stats.activation_calls_by_group[group] = _stats.activation_calls_by_group.get(group, 0) + 1
 
 
 def _is_visual_name(name: str) -> bool:
@@ -198,16 +252,47 @@ def mark_mxfp8_sim_linears(model: torch.nn.Module) -> int:
         raise RuntimeError("Could not import vLLM LinearBase for MXFP8 simulation") from exc
 
     marked = 0
+    marked_by_group: dict[str, int] = {}
     for name, module in model.named_modules():
-        if isinstance(module, LinearBase) and "lm_head" not in name.lower() and _in_simulation_scope(name):
+        if isinstance(module, LinearBase) and "lm_head" not in name.lower() and should_quantize_activation_module(name):
             setattr(module, _ACTIVATION_MARKER, True)
+            setattr(module, _ACTIVATION_NAME, name)
+            group = classify_mxfp8_activation_module(name)
+            marked_by_group[group] = marked_by_group.get(group, 0) + 1
             marked += 1
     logger.warning(
-        "MXFP8 simulation marked %d Linear layers for activation QDQ (scope=%s)",
+        "MXFP8 simulation marked %d Linear layers for activation QDQ (scope=%s, hook=%s, groups=%s, by_group=%s)",
         marked,
         get_mxfp8_sim_scope(),
+        get_mxfp8_activation_hook(),
+        sorted(get_mxfp8_activation_groups()),
+        marked_by_group,
     )
     return marked
+
+
+def patch_mxfp8_sim_linear_forwards(model: torch.nn.Module) -> int:
+    """Wrap marked LinearBase.forward methods for the Omni-style hook experiment."""
+    if get_mxfp8_sim_mode() != "w8a8" or get_mxfp8_activation_hook() != "forward":
+        return 0
+
+    patched = 0
+    for _, module in model.named_modules():
+        if not getattr(module, _ACTIVATION_MARKER, False) or getattr(module, "_verl_mxfp8_forward_patched", False):
+            continue
+        original_forward = module.forward
+        module_name = getattr(module, _ACTIVATION_NAME, "")
+
+        def forward(x, *args, __original_forward=original_forward, __module_name=module_name, **kwargs):
+            x = _quant_dequant_last_dim(x)
+            _record_activation_qdq(__module_name, x)
+            return __original_forward(x, *args, **kwargs)
+
+        module.forward = forward
+        setattr(module, "_verl_mxfp8_forward_patched", True)
+        patched += 1
+    logger.warning("MXFP8 simulation wrapped %d LinearBase.forward methods", patched)
+    return patched
 
 
 def apply_mxfp8_sim_patches() -> None:
@@ -223,10 +308,9 @@ def apply_mxfp8_sim_patches() -> None:
     original_apply = UnquantizedLinearMethod.apply
 
     def _patched_apply(self, layer, x, bias=None):
-        if getattr(layer, _ACTIVATION_MARKER, False):
+        if get_mxfp8_activation_hook() == "apply" and getattr(layer, _ACTIVATION_MARKER, False):
             x = _quant_dequant_last_dim(x)
-            _stats.activation_calls += 1
-            _stats.activation_elements += x.numel()
+            _record_activation_qdq(getattr(layer, _ACTIVATION_NAME, ""), x)
         return original_apply(self, layer, x, bias)
 
     _original_unquantized_linear_apply = original_apply
@@ -246,16 +330,20 @@ def apply_mxfp8_sim_patches() -> None:
     def _patched_load_weights(self, model, model_config):
         result = original_load_weights(self, model, model_config)
         mark_mxfp8_sim_linears(model)
+        patch_mxfp8_sim_linear_forwards(model)
         return result
 
     _original_default_loader_load_weights = original_load_weights
     DefaultModelLoader.load_weights = _patched_load_weights
     _linear_patch_applied = True
     logger.warning(
-        "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s)",
+        "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s, activation_hook=%s, "
+        "activation_groups=%s)",
         get_mxfp8_sim_mode(),
         get_mxfp8_sim_scope(),
         os.environ.get(_LANGUAGE_LAYER_RANGE_ENV, ""),
+        get_mxfp8_activation_hook(),
+        sorted(get_mxfp8_activation_groups()),
     )
 
 
@@ -267,9 +355,13 @@ __all__ = [
     "apply_mxfp8_sim_patches",
     "get_mxfp8_sim_mode",
     "get_mxfp8_sim_scope",
+    "get_mxfp8_activation_groups",
+    "get_mxfp8_activation_hook",
     "get_mxfp8_sim_stats",
     "is_mxfp8_sim_enabled",
     "mark_mxfp8_sim_linears",
+    "patch_mxfp8_sim_linear_forwards",
     "quant_dequant_weight_updates",
     "should_quantize_source_weight",
+    "should_quantize_activation_module",
 ]

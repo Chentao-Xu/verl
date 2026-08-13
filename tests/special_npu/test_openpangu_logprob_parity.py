@@ -52,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         default="all",
     )
     parser.add_argument("--rollout-mxfp8-layer-range", help="Optional inclusive language layer range START:END.")
+    parser.add_argument("--rollout-mxfp8-activation-hook", choices=("apply", "forward"), default="apply")
+    parser.add_argument(
+        "--rollout-mxfp8-activation-groups",
+        default="all",
+        help="Comma-separated qkv,o,gate_up,down,other or all.",
+    )
     parser.add_argument("--mean-threshold", type=float, default=0.01)
     parser.add_argument("--p95-threshold", type=float, default=0.05)
     parser.add_argument("--max-threshold", type=float, default=0.15)
@@ -115,6 +121,8 @@ def run_rollout(args: argparse.Namespace) -> None:
         os.environ["VERL_MXFP8_SIM_MODE"] = args.rollout_mxfp8
         os.environ["VERL_MXFP8_SIM_SCOPE"] = args.rollout_mxfp8_scope
         os.environ["VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"] = args.rollout_mxfp8_layer_range or ""
+        os.environ["VERL_MXFP8_SIM_ACTIVATION_HOOK"] = args.rollout_mxfp8_activation_hook
+        os.environ["VERL_MXFP8_SIM_ACTIVATION_GROUPS"] = args.rollout_mxfp8_activation_groups
         from verl.utils.vllm.mxfp8_sim import apply_mxfp8_sim_patches
 
         apply_mxfp8_sim_patches()
@@ -160,6 +168,8 @@ def run_rollout(args: argparse.Namespace) -> None:
         "rollout_mxfp8": args.rollout_mxfp8,
         "rollout_mxfp8_scope": args.rollout_mxfp8_scope,
         "rollout_mxfp8_layer_range": args.rollout_mxfp8_layer_range,
+        "rollout_mxfp8_activation_hook": args.rollout_mxfp8_activation_hook,
+        "rollout_mxfp8_activation_groups": args.rollout_mxfp8_activation_groups,
     }
     path = Path(args.fixture_path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,30 @@
 import pytest
 import torch
 
-from verl.utils.vllm.mxfp8_sim import should_quantize_source_weight
+from verl.utils.vllm.mxfp8_sim import (
+    classify_mxfp8_activation_module,
+    get_mxfp8_activation_groups,
+    should_quantize_activation_module,
+    should_quantize_source_weight,
+)
+
+
+def test_activation_module_classification():
+    assert classify_mxfp8_activation_module("model.layers.0.self_attn.qkv_proj") == "qkv"
+    assert classify_mxfp8_activation_module("model.layers.0.self_attn.o_proj") == "o"
+    assert classify_mxfp8_activation_module("model.layers.0.mlp.gate_up_proj") == "gate_up"
+    assert classify_mxfp8_activation_module("model.layers.0.mlp.down_proj") == "down"
+    assert classify_mxfp8_activation_module("model.layers.0.foo") == "other"
+
+
+def test_activation_group_filter(monkeypatch):
+    monkeypatch.setenv("VERL_MXFP8_SIM_SCOPE", "language_only")
+    monkeypatch.setenv("VERL_MXFP8_SIM_ACTIVATION_GROUPS", "qkv,down")
+    assert get_mxfp8_activation_groups() == {"qkv", "down"}
+    assert should_quantize_activation_module("model.layers.0.self_attn.qkv_proj")
+    assert should_quantize_activation_module("model.layers.0.mlp.down_proj")
+    assert not should_quantize_activation_module("model.layers.0.mlp.gate_up_proj")
+    assert not should_quantize_activation_module("visual.blocks.0.attn.qkv_proj")
 
 
 def test_mxfp8_qat_modes_are_registered():
