@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# 200-step convergence: non-QAT simulated MXFP8 Actor + W8A8 MXFP8 rollout.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+export VERL_MXFP8_ACTOR_QAT=0
+export VERL_MXFP8_ACTOR_TRAIN_SIM=1
+export VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE=${VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE:-0:33}
+export VERL_MXFP8_SIM_MODE=w8a8
+export VERL_MXFP8_SIM_SCOPE=language_only
+export VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE=0:33
+export VERL_FORCE_WEIGHT_SYNC_SHM=1
+
+export TOTAL_TRAINING_STEPS=${TOTAL_TRAINING_STEPS:-200}
+export TRAIN_BATCH_SIZE=${TRAIN_BATCH_SIZE:-16}
+export PPO_MINI_BATCH_SIZE=${PPO_MINI_BATCH_SIZE:-16}
+export ROLLOUT_N=${ROLLOUT_N:-4}
+export TRAIN_MAX_SAMPLES=${TRAIN_MAX_SAMPLES:--1}
+export VAL_MAX_SAMPLES=${VAL_MAX_SAMPLES:-256}
+
+export MAX_PROMPT_LENGTH=${MAX_PROMPT_LENGTH:-3072}
+export MAX_RESPONSE_LENGTH=${MAX_RESPONSE_LENGTH:-1024}
+export MAX_MODEL_LENGTH=${MAX_MODEL_LENGTH:-8192}
+export PPO_MAX_TOKEN_LEN_PER_GPU=${PPO_MAX_TOKEN_LEN_PER_GPU:-4096}
+export ACTOR_ATTN_IMPLEMENTATION=${ACTOR_ATTN_IMPLEMENTATION:-sdpa}
+
+export TEST_FREQ=${TEST_FREQ:-10}
+export SAVE_FREQ=${SAVE_FREQ:-50}
+export LOG_VAL_GENERATIONS=${LOG_VAL_GENERATIONS:-16}
+export TRAINER_LOGGER=${TRAINER_LOGGER:-'["console","wandb"]'}
+export PROJECT_NAME=${PROJECT_NAME:-openpangu_vl_grpo_npu}
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_virl39k_actor_rollout_mxfp8_b16n4_200step_20260819}
+export LOG_DIR=${LOG_DIR:-/home/chentaoxu/data/openpangu-vl-npu/mxfp8-sim-20260812/${EXPERIMENT_NAME}}
+export CHECKPOINT_DIR=${CHECKPOINT_DIR:-${LOG_DIR}/checkpoints}
+export VALIDATION_DATA_DIR=${VALIDATION_DATA_DIR:-${LOG_DIR}/generations}
+export WANDB_MODE=${WANDB_MODE:-online}
+
+exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu_mxfp8_sim.sh" "$@"
