@@ -4,9 +4,15 @@ import torch
 from verl.utils.vllm.mxfp8_sim import (
     classify_mxfp8_activation_module,
     get_mxfp8_activation_groups,
+    get_low_precision_sim_format,
     should_quantize_activation_module,
     should_quantize_source_weight,
 )
+
+
+def test_low_precision_sim_format(monkeypatch):
+    monkeypatch.setenv("VERL_LOW_PRECISION_SIM_FORMAT", "hif8")
+    assert get_low_precision_sim_format() == "hif8"
 
 
 def test_activation_module_classification():

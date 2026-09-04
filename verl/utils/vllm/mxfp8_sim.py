@@ -33,12 +33,14 @@ import torch
 logger = logging.getLogger(__name__)
 
 _ENABLED_ENV = "VERL_VLLM_MXFP8_SIM_ENABLED"
+_FORMAT_ENV = "VERL_LOW_PRECISION_SIM_FORMAT"
 _MODE_ENV = "VERL_MXFP8_SIM_MODE"
 _SCOPE_ENV = "VERL_MXFP8_SIM_SCOPE"
 _LANGUAGE_LAYER_RANGE_ENV = "VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"
 _ACTIVATION_HOOK_ENV = "VERL_MXFP8_SIM_ACTIVATION_HOOK"
 _ACTIVATION_GROUPS_ENV = "VERL_MXFP8_SIM_ACTIVATION_GROUPS"
 _VALID_MODES = {"weight_only", "w8a8"}
+_VALID_FORMATS = {"mxfp8", "hif8"}
 _VALID_SCOPES = {"all", "language_only", "visual_only"}
 _VALID_ACTIVATION_HOOKS = {"apply", "forward"}
 _VALID_ACTIVATION_GROUPS = {"qkv", "o", "gate_up", "down", "other"}
@@ -65,6 +67,13 @@ _source_name_audit_groups: set[str] = set()
 
 def is_mxfp8_sim_enabled() -> bool:
     return os.environ.get(_ENABLED_ENV, "0") == "1"
+
+
+def get_low_precision_sim_format() -> str:
+    value = os.environ.get(_FORMAT_ENV, "mxfp8").lower()
+    if value not in _VALID_FORMATS:
+        raise ValueError(f"{_FORMAT_ENV} must be one of {sorted(_VALID_FORMATS)}, got {value!r}")
+    return value
 
 
 def get_mxfp8_sim_mode() -> str:
@@ -184,21 +193,34 @@ def should_quantize_source_weight(name: str, tensor: torch.Tensor) -> bool:
 
 def _quant_dequant_last_dim(tensor: torch.Tensor) -> torch.Tensor:
     try:
-        from quant_cy_npu.QTensor import quant_dequant_float
+        from quant_cy_npu.QTensor import delay_quant_dequant_float, quant_dequant_float
         from quant_cy_npu.QType import QType
     except ImportError as exc:
         raise RuntimeError(
             "MXFP8 simulation requires quant_cy_npu on PYTHONPATH and its cusrc directory on LD_LIBRARY_PATH"
         ) from exc
 
-    qtype = QType("mxfp8e4m3").dim_(-1)
+    sim_format = get_low_precision_sim_format()
+
+    def qdq(value: torch.Tensor) -> torch.Tensor:
+        if sim_format == "hif8":
+            amax = float(value.detach().abs().max())
+            return delay_quant_dequant_float(
+                value,
+                amax,
+                15,
+                QType("dhif8").dim_(-1),
+                force_py=False,
+            )
+        return quant_dequant_float(value, QType("mxfp8e4m3").dim_(-1), force_py=False)
+
     if tensor.device.type == "npu":
-        return quant_dequant_float(tensor, qtype, force_py=False)
+        return qdq(tensor)
 
     # DefaultModelLoader streams checkpoint tensors from CPU. Stage one tensor
     # at a time through the active NPU because quant_cy_npu has no CPU kernel.
     staged = tensor.to("npu")
-    quantized = quant_dequant_float(staged, qtype, force_py=False)
+    quantized = qdq(staged)
     return quantized.to(tensor.device)
 
 
@@ -232,10 +254,11 @@ def quant_dequant_weight_updates(
         if source_name_examples:
             audit_group = "visual" if _is_visual_name(source_name_examples[0]) else "non_visual"
             if audit_group not in _source_name_audit_groups:
-                logger.warning("MXFP8 %s source weight name examples: %s", audit_group, source_name_examples)
+                logger.warning("%s %s source weight name examples: %s", get_low_precision_sim_format(), audit_group, source_name_examples)
                 _source_name_audit_groups.add(audit_group)
         logger.warning(
-            "MXFP8 simulation quantized %d weight tensors (%d elements) for this reload",
+            "%s simulation quantized %d weight tensors (%d elements) for this reload",
+            get_low_precision_sim_format(),
             quantized_tensors,
             _stats.weight_elements - before_elements,
         )
@@ -337,8 +360,9 @@ def apply_mxfp8_sim_patches() -> None:
     DefaultModelLoader.load_weights = _patched_load_weights
     _linear_patch_applied = True
     logger.warning(
-        "Applied MXFP8 simulation patch (mode=%s, scope=%s, language_layer_range=%s, activation_hook=%s, "
+        "Applied %s simulation patch (mode=%s, scope=%s, language_layer_range=%s, activation_hook=%s, "
         "activation_groups=%s)",
+        get_low_precision_sim_format(),
         get_mxfp8_sim_mode(),
         get_mxfp8_sim_scope(),
         os.environ.get(_LANGUAGE_LAYER_RANGE_ENV, ""),
@@ -354,6 +378,7 @@ def get_mxfp8_sim_stats() -> MXFP8SimStats:
 __all__ = [
     "apply_mxfp8_sim_patches",
     "get_mxfp8_sim_mode",
+    "get_low_precision_sim_format",
     "get_mxfp8_sim_scope",
     "get_mxfp8_activation_groups",
     "get_mxfp8_activation_hook",

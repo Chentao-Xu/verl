@@ -157,8 +157,11 @@ class FSDPEngine(BaseEngine):
         # Non-QAT MXFP8 Actor simulation: BF16 master parameters and optimizer
         # states, with QDQ applied independently to all three Linear GEMMs.
         self._mxfp8_train_sim_enabled = os.getenv("VERL_MXFP8_ACTOR_TRAIN_SIM", "0") == "1"
-        if self._mxfp8_train_sim_enabled and self._qat_enabled:
-            raise ValueError("VERL_MXFP8_ACTOR_TRAIN_SIM and Actor QAT cannot be enabled together")
+        self._hif8_train_sim_enabled = os.getenv("VERL_HIF8_ACTOR_TRAIN_SIM", "0") == "1"
+        if self._mxfp8_train_sim_enabled and self._hif8_train_sim_enabled:
+            raise ValueError("MXFP8 and HiF8 Actor simulations cannot be enabled together")
+        if (self._mxfp8_train_sim_enabled or self._hif8_train_sim_enabled) and self._qat_enabled:
+            raise ValueError("Non-QAT Actor simulation and Actor QAT cannot be enabled together")
 
         if self.engine_config.entropy_from_logits_with_chunking:
             entropy_from_logits = verl_F.entropy_from_logits_with_chunking
@@ -595,6 +598,24 @@ class FSDPEngine(BaseEngine):
             if self.rank == 0:
                 print(
                     "Actor MXFP8 training simulation enabled "
+                    f"(non-QAT, three-GEMM QDQ, converted={converted}, range={layer_range})"
+                )
+
+        if self._hif8_train_sim_enabled and not self.engine_config.forward_only:
+            from verl.utils.hif8_train import apply_hif8_train_sim
+
+            layer_range = os.getenv("VERL_HIF8_ACTOR_TRAIN_LAYER_RANGE", "0:33")
+            try:
+                layer_start, layer_end = (int(value) for value in layer_range.split(":"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "VERL_HIF8_ACTOR_TRAIN_LAYER_RANGE must be START:END, "
+                    f"got {layer_range!r}"
+                ) from exc
+            converted = apply_hif8_train_sim(module, layer_start=layer_start, layer_end=layer_end)
+            if self.rank == 0:
+                print(
+                    "Actor HiF8 training simulation enabled "
                     f"(non-QAT, three-GEMM QDQ, converted={converted}, range={layer_range})"
                 )
 
