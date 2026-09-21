@@ -2,9 +2,13 @@ import pytest
 import torch
 
 from verl.utils.vllm.mxfp8_sim import (
+    _qtype_name_for_format,
     classify_mxfp8_activation_module,
     get_mxfp8_activation_groups,
+    get_low_precision_activation_format,
     get_low_precision_sim_format,
+    get_low_precision_weight_format,
+    get_rollout_operand_formats,
     should_quantize_activation_module,
     should_quantize_source_weight,
 )
@@ -13,6 +17,37 @@ from verl.utils.vllm.mxfp8_sim import (
 def test_low_precision_sim_format(monkeypatch):
     monkeypatch.setenv("VERL_LOW_PRECISION_SIM_FORMAT", "hif8")
     assert get_low_precision_sim_format() == "hif8"
+
+
+def test_operand_formats_fall_back_to_legacy_format(monkeypatch):
+    monkeypatch.setenv("VERL_LOW_PRECISION_SIM_FORMAT", "hif8")
+    monkeypatch.delenv("VERL_LOW_PRECISION_WEIGHT_FORMAT", raising=False)
+    monkeypatch.delenv("VERL_LOW_PRECISION_ACTIVATION_FORMAT", raising=False)
+
+    assert get_low_precision_weight_format() == "hif8"
+    assert get_low_precision_activation_format() == "hif8"
+
+
+def test_mxfp4_w4a8_uses_split_operand_formats(monkeypatch):
+    monkeypatch.setenv("VERL_LOW_PRECISION_WEIGHT_FORMAT", "mxfp4")
+    monkeypatch.setenv("VERL_LOW_PRECISION_ACTIVATION_FORMAT", "mxfp8")
+
+    assert get_low_precision_weight_format() == "mxfp4"
+    assert get_low_precision_activation_format() == "mxfp8"
+    assert _qtype_name_for_format(get_low_precision_weight_format()) == "mxfp4"
+    assert _qtype_name_for_format(get_low_precision_activation_format()) == "mxfp8e4m3"
+
+
+@pytest.mark.parametrize(
+    ("quantization", "expected"),
+    [
+        ("mxfp8_sim", ("mxfp8", "mxfp8")),
+        ("hif8_sim", ("hif8", "hif8")),
+        ("mxfp4_w4a8_sim", ("mxfp4", "mxfp8")),
+    ],
+)
+def test_rollout_operand_format_mapping(quantization, expected):
+    assert get_rollout_operand_formats(quantization) == expected
 
 
 def test_activation_module_classification():

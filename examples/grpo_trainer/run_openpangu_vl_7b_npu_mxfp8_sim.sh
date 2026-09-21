@@ -19,6 +19,7 @@ fi
 export VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE=${VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE:-}
 export VERL_MXFP8_SIM_ACTIVATION_HOOK=${VERL_MXFP8_SIM_ACTIVATION_HOOK:-apply}
 export VERL_MXFP8_SIM_ACTIVATION_GROUPS=${VERL_MXFP8_SIM_ACTIVATION_GROUPS:-all}
+export ROLLOUT_QUANTIZATION=${ROLLOUT_QUANTIZATION:-mxfp8_sim}
 export VERL_MXFP8_ACTOR_QAT=${VERL_MXFP8_ACTOR_QAT:-0}
 export VERL_MXFP8_ACTOR_TRAIN_SIM=${VERL_MXFP8_ACTOR_TRAIN_SIM:-0}
 export VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE=${VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE:-0:33}
@@ -58,7 +59,7 @@ export SAVE_FREQ=${SAVE_FREQ:--1}
 export LOG_VAL_GENERATIONS=${LOG_VAL_GENERATIONS:-8}
 export TRAINER_LOGGER=${TRAINER_LOGGER:-'["console"]'}
 export PROJECT_NAME=${PROJECT_NAME:-openpangu_vl_grpo_npu}
-export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_mxfp8_sim_${VERL_MXFP8_SIM_MODE}_${VERL_MXFP8_SIM_SCOPE}_${TOTAL_TRAINING_STEPS}step}
+export EXPERIMENT_NAME=${EXPERIMENT_NAME:-openpangu_vl_7b_${ROLLOUT_QUANTIZATION}_${VERL_MXFP8_SIM_MODE}_${VERL_MXFP8_SIM_SCOPE}_${TOTAL_TRAINING_STEPS}step}
 export LOG_DIR=${LOG_DIR:-/home/chentaoxu/data/openpangu-vl-npu/mxfp8-sim-20260812/${EXPERIMENT_NAME}}
 export CHECKPOINT_DIR=${CHECKPOINT_DIR:-${LOG_DIR}/checkpoints}
 export VALIDATION_DATA_DIR=${VALIDATION_DATA_DIR:-${LOG_DIR}/generations}
@@ -84,8 +85,8 @@ if [[ "${idle_npu_count}" -ne "${NDEVICES_PER_NODE}" ]]; then
 fi
 
 mkdir -p "${LOG_DIR}" "${CHECKPOINT_DIR}" "${VALIDATION_DATA_DIR}" "${RAY_TMPDIR}"
-git -C "${REPO_ROOT}" rev-parse HEAD | tee "${LOG_DIR}/git_head.txt"
-env | grep -E '^(VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE|VERL_MXFP8_SIM_ACTIVATION_HOOK|VERL_MXFP8_SIM_ACTIVATION_GROUPS|VERL_MXFP8_ACTOR_QAT|VERL_MXFP8_ACTOR_TRAIN_SIM|VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE|VERL_FORCE_WEIGHT_SYNC_SHM|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
+git -c safe.directory="${REPO_ROOT}" -C "${REPO_ROOT}" rev-parse HEAD | tee "${LOG_DIR}/git_head.txt"
+env | grep -E '^(ROLLOUT_QUANTIZATION|VERL_LOW_PRECISION_WEIGHT_FORMAT|VERL_LOW_PRECISION_ACTIVATION_FORMAT|VERL_MXFP8_SIM_MODE|VERL_MXFP8_SIM_SCOPE|VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE|VERL_MXFP8_SIM_ACTIVATION_HOOK|VERL_MXFP8_SIM_ACTIVATION_GROUPS|VERL_MXFP8_ACTOR_QAT|VERL_MXFP8_ACTOR_TRAIN_SIM|VERL_MXFP8_ACTOR_TRAIN_LAYER_RANGE|VERL_FORCE_WEIGHT_SYNC_SHM|TOTAL_TRAINING_STEPS|TRAIN_BATCH_SIZE|ROLLOUT_N|MAX_RESPONSE_LENGTH)=' \
     | sort | tee "${LOG_DIR}/experiment_env.txt"
 
 actor_qat_args=()
@@ -139,7 +140,7 @@ exec "${SCRIPT_DIR}/run_openpangu_vl_7b_npu.sh" \
     actor_rollout_ref.actor.kl_loss_coef=0.01 \
     actor_rollout_ref.actor.kl_loss_type=low_var_kl \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1 \
-    actor_rollout_ref.rollout.quantization=mxfp8_sim \
+    actor_rollout_ref.rollout.quantization="${ROLLOUT_QUANTIZATION}" \
     algorithm.rollout_correction.rollout_is=token \
     algorithm.rollout_correction.rollout_is_threshold=2.0 \
     algorithm.rollout_correction.rollout_is_batch_normalize=False \

@@ -914,19 +914,37 @@ class vLLMHttpServer:
             hf_overrides["quantization_config"] = quantization_config_dict
         elif quantization is not None:
             # Handle other quantization methods (fp8, torchao)
-            _SUPPORTED_QUANTIZATION = ["fp8", "torchao", "ascend", "mxfp8_sim", "hif8_sim"]
+            _SUPPORTED_QUANTIZATION = [
+                "fp8",
+                "torchao",
+                "ascend",
+                "mxfp8_sim",
+                "hif8_sim",
+                "mxfp4_w4a8_sim",
+            ]
             if quantization not in _SUPPORTED_QUANTIZATION:
                 raise ValueError(f"Currently only support {_SUPPORTED_QUANTIZATION} quantization, got: {quantization}")
 
-            if quantization in {"mxfp8_sim", "hif8_sim"}:
+            if quantization in {"mxfp8_sim", "hif8_sim", "mxfp4_w4a8_sim"}:
                 if not is_torch_npu_available(check_device=False):
                     raise RuntimeError(f"{quantization} rollout is only available with torch_npu")
                 # Keep vLLM's model and GEMM in BF16. The worker extension
                 # injects quantize-dequantize rounding into weights/activations.
+                from verl.utils.vllm.mxfp8_sim import get_rollout_operand_formats
+
+                weight_format, activation_format = get_rollout_operand_formats(quantization)
                 os.environ["VERL_VLLM_MXFP8_SIM_ENABLED"] = "1"
-                os.environ["VERL_LOW_PRECISION_SIM_FORMAT"] = quantization.removesuffix("_sim")
+                # Keep the legacy variable for existing worker code and logs;
+                # the operand-specific variables take precedence.
+                os.environ["VERL_LOW_PRECISION_SIM_FORMAT"] = weight_format
+                os.environ["VERL_LOW_PRECISION_WEIGHT_FORMAT"] = weight_format
+                os.environ["VERL_LOW_PRECISION_ACTIVATION_FORMAT"] = activation_format
                 quantization = None
-                logger.warning("Enabled NPU %s numerical rollout simulation", os.environ["VERL_LOW_PRECISION_SIM_FORMAT"])
+                logger.warning(
+                    "Enabled NPU numerical rollout simulation (weight=%s, activation=%s, gemm=bf16)",
+                    weight_format,
+                    activation_format,
+                )
             elif quantization == "fp8":
                 # Ignore MoE router layers for FP8 quantization
                 all_mlp_gate_layers = []
