@@ -16,6 +16,7 @@ if [[ -e "${RUN}/run_manifest.txt" ]] || [[ -e "${RUN}/checkpoints" ]]; then
     exit 2
 fi
 mkdir -p "${RUN}" "${RUN}/generations"
+trap 'status=$?; printf "exit_code=%s\nfinished_at=%s\n" "$status" "$(date -Is)" > "${RUN}/exit_status.txt"' EXIT
 
 export MODEL_PATH=/home/chentaoxu/data/models/openPangu-VL-7B
 export TRAIN_FILE="${DATA}/train_single_image_max3072_seed42_4000.parquet"
@@ -68,7 +69,7 @@ export PYTHONPATH="/vllm:${PYTHONPATH:-}"
     printf 'test_sha256=%s\n' "$(sha256sum "${TEST_FILE}" | awk '{print $1}')"
 } > "${RUN}/run_manifest.txt"
 
-exec bash "${ENTRY}" \
+bash "${ENTRY}" \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \
     actor_rollout_ref.actor.use_dynamic_bsz=True \
