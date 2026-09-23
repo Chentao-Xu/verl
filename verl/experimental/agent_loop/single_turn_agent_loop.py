@@ -50,6 +50,8 @@ class SingleTurnAgentLoop(AgentLoopBase):
         # 2. apply chat template and tokenize
         use_continuous_token = self.enable_continuous_token and not multi_modal_data
         if use_continuous_token:
+            if "score_centering_ids" in output.extra_fields:
+                raise NotImplementedError("Score centering requires unmodified single-turn rollout token alignment")
             prompt_ids = await self.ct_build_initial_tokens(messages)
         else:
             prompt_ids = await self.apply_chat_template(
@@ -97,6 +99,16 @@ class SingleTurnAgentLoop(AgentLoopBase):
             response_ids=response_ids[: self.response_length],
             response_mask=response_mask[: self.response_length],
             response_logprobs=response_logprobs[: self.response_length] if response_logprobs else None,
+            score_centering_ids=(
+                output.extra_fields.pop("score_centering_ids")[: self.response_length]
+                if "score_centering_ids" in output.extra_fields
+                else None
+            ),
+            score_centering_logprobs=(
+                output.extra_fields.pop("score_centering_logprobs")[: self.response_length]
+                if "score_centering_logprobs" in output.extra_fields
+                else None
+            ),
             routed_experts=(
                 output.routed_experts[: len(prompt_ids) + self.response_length]
                 if output.routed_experts is not None

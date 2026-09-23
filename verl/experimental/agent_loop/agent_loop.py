@@ -99,6 +99,8 @@ class AgentLoopOutput(BaseModel):
     """Response mask, 1 for LLM generated token, 0 for tool response token."""
     response_logprobs: Optional[list[float]] = None
     """Log probabilities for the response tokens."""
+    score_centering_ids: Optional[list[list[int]]] = None
+    score_centering_logprobs: Optional[list[list[float]]] = None
     routed_experts: Optional[Any] = None
     """Routed experts for the total tokens."""
     multi_modal_data: Optional[dict[str, Any]] = None
@@ -167,6 +169,8 @@ class _InternalAgentLoopOutput(AgentLoopOutput):
     """Padded attention mask."""
     response_logprobs: Optional[torch.Tensor] = None
     """Padded log probabilities for the response tokens."""
+    score_centering_ids: Optional[torch.Tensor] = None
+    score_centering_logprobs: Optional[torch.Tensor] = None
     teacher_logprobs: Optional[torch.Tensor] = None
     """Padded log probabilities from teacher model for prompt/response tokens."""
     teacher_ids: Optional[torch.Tensor] = None
@@ -587,7 +591,9 @@ class AgentLoopWorker:
             top_p=config.top_p,
             top_k=config.top_k,
             repetition_penalty=1.0,
-            logprobs=config.calculate_log_probs,
+            logprobs=(
+                config.score_centering_topk if config.score_centering_topk and not validate else config.calculate_log_probs
+            ),
         )
 
         def apply_greedy_sampling_params(params: dict[str, Any]) -> None:
@@ -770,6 +776,20 @@ class AgentLoopWorker:
             pad_size = self.rollout_config.response_length - len(output.response_logprobs)
             response_logprobs = torch.tensor(output.response_logprobs + [0.0] * pad_size).unsqueeze(0)
 
+        score_centering_ids = score_centering_logprobs = None
+        if output.score_centering_ids is not None:
+            if output.score_centering_logprobs is None or len(output.score_centering_ids) != len(output.response_ids):
+                raise ValueError("Score-centering top-k values are not aligned with rollout response tokens")
+            topk = self.rollout_config.score_centering_topk
+            pad_size = self.rollout_config.response_length - len(output.score_centering_ids)
+            score_centering_ids = torch.tensor(
+                output.score_centering_ids + [[0] * topk for _ in range(pad_size)], dtype=torch.int64
+            ).unsqueeze(0)
+            score_centering_logprobs = torch.tensor(
+                output.score_centering_logprobs + [[float("-inf")] * topk for _ in range(pad_size)],
+                dtype=torch.float32,
+            ).unsqueeze(0)
+
         response_mask = response_mask_output["input_ids"] * response_output["attention_mask"]
         attention_mask = torch.cat([prompt_output["attention_mask"], response_output["attention_mask"]], dim=1)
         input_ids = torch.cat([prompt_output["input_ids"], response_output["input_ids"]], dim=1)
@@ -846,6 +866,8 @@ class AgentLoopWorker:
             response_mask=response_mask,
             attention_mask=attention_mask,
             response_logprobs=response_logprobs,
+            score_centering_ids=score_centering_ids,
+            score_centering_logprobs=score_centering_logprobs,
             routed_experts=routed_experts,
             multi_modal_inputs=multi_modal_inputs,
             multi_modal_data=output.multi_modal_data,
@@ -1045,6 +1067,13 @@ class AgentLoopWorker:
         optional_outputs = {}
         if inputs[0].response_logprobs is not None:
             optional_outputs["rollout_log_probs"] = torch.cat([input.response_logprobs for input in inputs], dim=0)
+        if inputs[0].score_centering_ids is not None:
+            if any(input.score_centering_ids is None for input in inputs):
+                raise ValueError("Score-centering top-k rollout data missing for part of batch")
+            optional_outputs["score_centering_ids"] = torch.cat([input.score_centering_ids for input in inputs], dim=0)
+            optional_outputs["score_centering_logprobs"] = torch.cat(
+                [input.score_centering_logprobs for input in inputs], dim=0
+            )
         if inputs[0].routed_experts is not None:
             optional_outputs["routed_experts"] = torch.cat([input.routed_experts for input in inputs], dim=0)
         if inputs[0].teacher_logprobs is not None and inputs[0].teacher_ids is not None:

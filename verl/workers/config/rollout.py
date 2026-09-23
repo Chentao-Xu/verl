@@ -216,6 +216,9 @@ class RolloutConfig(BaseConfig):
     engine_kwargs: dict = field(default_factory=dict)
 
     calculate_log_probs: bool = False
+    # Number of processed rollout-policy probabilities retained for score centering.
+    # Zero leaves the normal sampled-token-only logprob path unchanged.
+    score_centering_topk: int = 0
 
     agent: AgentLoopConfig = field(default_factory=AgentLoopConfig)
 

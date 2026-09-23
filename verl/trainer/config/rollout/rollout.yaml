@@ -232,6 +232,9 @@ multi_turn:
 # "Truncated importance sampling" requires rollout log probs, set to True when turning on Truncated importance sampling
 calculate_log_probs: True
 
+# Retain this many processed vLLM top-k logprobs for score centering (0 disables it).
+score_centering_topk: 0
+
 # [Experimental] agent loop based rollout configs
 agent:
 

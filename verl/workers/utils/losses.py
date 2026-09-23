@@ -57,6 +57,15 @@ def sft_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None):
     """Computes ppo loss from model output (log_prob, entropy, values, etc. ) and old_log_probs from data."""
     log_prob = no_padding_2_padding(model_output["log_probs"], data)
+    score_centering_correction = None
+    sampler_head_mass = None
+    if config.policy_loss.get("loss_mode", "vanilla") == "score_centering":
+        if "score_centering_correction" not in model_output:
+            raise ValueError("Score centering requires rollout top-k data and actor correction")
+        score_centering_correction = no_padding_2_padding(model_output["score_centering_correction"], data)
+        sampler_head_mass = masked_mean(
+            data["score_centering_logprobs"].float().exp().sum(-1), data["response_mask"].bool()
+        )
     entropy = model_output.get("entropy", None)
     if entropy is not None:
         entropy = no_padding_2_padding(entropy, data)
@@ -100,16 +109,29 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     loss_mode = config.policy_loss.get("loss_mode", "vanilla")
 
-    policy_loss_fn = get_policy_loss_fn(loss_mode)
-    pg_loss, pg_metrics = policy_loss_fn(
-        old_log_prob=old_log_prob,
-        log_prob=log_prob,
-        advantages=advantages,
-        response_mask=response_mask,
-        loss_agg_mode=loss_agg_mode,
-        config=config,
-        rollout_is_weights=rollout_is_weights,
-    )
+    if loss_mode == "score_centering":
+        if rollout_is_weights is not None:
+            raise ValueError("Standalone score centering must not be combined with TIS weights")
+        pg_loss = agg_loss(
+            loss_mat=-advantages * (log_prob - score_centering_correction),
+            loss_mask=response_mask,
+            loss_agg_mode=loss_agg_mode,
+            **config.global_batch_info,
+        )
+        pg_metrics = {
+            "score_centering/sampler_head_mass": sampler_head_mass.item(),
+        }
+    else:
+        policy_loss_fn = get_policy_loss_fn(loss_mode)
+        pg_loss, pg_metrics = policy_loss_fn(
+            old_log_prob=old_log_prob,
+            log_prob=log_prob,
+            advantages=advantages,
+            response_mask=response_mask,
+            loss_agg_mode=loss_agg_mode,
+            config=config,
+            rollout_is_weights=rollout_is_weights,
+        )
 
     # AggregationType.MEAN for pg metrics: assumes policy_loss_fn normalizes by local_bsz/local_tokens
     # Ex: in compute_policy_loss_vanilla, pg_metrics are pg_clipfrac, ppo_kl, pg_clipfrac_lower

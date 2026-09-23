@@ -278,6 +278,7 @@ class vLLMHttpServer:
             "enable_prefix_caching": self.config.enable_prefix_caching,
             "enable_sleep_mode": self.config.enable_sleep_mode,
             "logprobs_mode": self.config.logprobs_mode,
+            "max_logprobs": max(20, self.config.score_centering_topk),
             "enforce_eager": self.config.enforce_eager,
             "gpu_memory_utilization": self.config.gpu_memory_utilization,
             "disable_log_stats": self.config.disable_log_stats,
@@ -514,7 +515,10 @@ class vLLMHttpServer:
         assert 1 <= max_tokens <= max_possible_tokens, (
             f"max_tokens {max_tokens} not in valid range [1, {max_possible_tokens}]"
         )
-        sampling_params["logprobs"] = 0 if sampling_params.pop("logprobs", False) else None
+        requested_logprobs = sampling_params.pop("logprobs", False)
+        sampling_params["logprobs"] = (
+            0 if requested_logprobs is True else int(requested_logprobs) if requested_logprobs else None
+        )
         sampling_params.setdefault("repetition_penalty", self.config.get("repetition_penalty", 1.0))
         sampling_params.setdefault("ignore_eos", self.config.get("ignore_eos", False))
         # Inject per-request seed for deterministic sampling when full_determinism is enabled.
@@ -584,6 +588,24 @@ class vLLMHttpServer:
         log_probs = None
         if sampling_params.logprobs is not None:
             log_probs = [logprobs[token_ids[i]].logprob for i, logprobs in enumerate(final_res.outputs[0].logprobs)]
+        if sampling_params.logprobs and sampling_params.logprobs > 0:
+            topk = sampling_params.logprobs
+            score_ids, score_logprobs = [], []
+            for token_logprobs in final_res.outputs[0].logprobs:
+                head = sorted(
+                    (
+                        (token_id, entry)
+                        for token_id, entry in token_logprobs.items()
+                        if entry.rank is not None and 1 <= entry.rank <= topk
+                    ),
+                    key=lambda item: item[1].rank,
+                )
+                if not head:
+                    raise ValueError("vLLM did not return ranked processed top-k logprobs for score centering")
+                score_ids.append([token_id for token_id, _ in head] + [0] * (topk - len(head)))
+                score_logprobs.append([entry.logprob for _, entry in head] + [float("-inf")] * (topk - len(head)))
+            extra_fields["score_centering_ids"] = score_ids
+            extra_fields["score_centering_logprobs"] = score_logprobs
 
         routed_experts = None
         if self.config.enable_rollout_routing_replay:

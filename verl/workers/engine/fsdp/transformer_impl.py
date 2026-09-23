@@ -1144,6 +1144,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
             data=micro_batch, key="calculate_sum_pi_squared", default=False
         )
         distillation_use_topk = tu.get_non_tensor_data(data=micro_batch, key="distillation_use_topk", default=False)
+        score_centering_enabled = logits_processor_func is not None and "score_centering_ids" in micro_batch
+        if score_centering_enabled and (use_fused_kernels or self.use_ulysses_sp):
+            raise NotImplementedError("Score centering currently requires FSDP logits without SP/fused kernels")
 
         if calculate_sum_pi_squared and use_fused_kernels:
             raise NotImplementedError(
@@ -1184,13 +1187,24 @@ class FSDPEngineWithLMHead(FSDPEngine):
 
                 # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
                 inplace_backward = True
-                if calculate_entropy:
+                if calculate_entropy or score_centering_enabled:
                     inplace_backward = False
                 log_probs = logprobs_from_logits(
                     logits=logits_rmpad,
                     labels=input_ids_rmpad_rolled,
                     inplace_backward=inplace_backward,
                 )
+
+                if score_centering_enabled:
+                    from verl.workers.utils.score_centering import correction_for_response_logits
+
+                    correction_full, _, _ = correction_for_response_logits(
+                        logits_rmpad, micro_batch
+                    )
+                    cu_seqlens = input_ids.offsets()
+                    model_output["score_centering_correction"] = torch.nested.nested_tensor_from_jagged(
+                        correction_full, cu_seqlens
+                    )
 
                 # compute entropy
                 if calculate_entropy:
@@ -1288,7 +1302,21 @@ class FSDPEngineWithLMHead(FSDPEngine):
                     logits = torch.nested.narrow(logits, 1, starts, seq_lengths, layout=torch.jagged)
                     logits_rmpad = torch.cat([t for t in logits.unbind()])
                     input_ids_rmpad_rolled = output_args["input_ids_rmpad_rolled"]
-                    log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
+                    log_probs = logprobs_from_logits(
+                        logits=logits_rmpad,
+                        labels=input_ids_rmpad_rolled,
+                        inplace_backward=not score_centering_enabled,
+                    )
+
+                    if score_centering_enabled:
+                        from verl.workers.utils.score_centering import correction_for_response_logits
+
+                        correction_full, _, _ = correction_for_response_logits(
+                            logits_rmpad, micro_batch
+                        )
+                        model_output["score_centering_correction"] = torch.nested.nested_tensor_from_jagged(
+                            correction_full, cu_seqlens
+                        )
 
                     # Mirror the use_remove_padding=True branch (see verl#6293).
                     # No Ulysses SP gather here: this branch is the no-SP path
