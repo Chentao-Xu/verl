@@ -42,7 +42,7 @@ _LANGUAGE_LAYER_RANGE_ENV = "VERL_MXFP8_SIM_LANGUAGE_LAYER_RANGE"
 _ACTIVATION_HOOK_ENV = "VERL_MXFP8_SIM_ACTIVATION_HOOK"
 _ACTIVATION_GROUPS_ENV = "VERL_MXFP8_SIM_ACTIVATION_GROUPS"
 _VALID_MODES = {"weight_only", "w8a8"}
-_VALID_FORMATS = {"mxfp4", "mxfp8", "hif8"}
+_VALID_FORMATS = {"mxfp4", "mxfp8", "hif4", "hif8"}
 _VALID_SCOPES = {"all", "language_only", "visual_only"}
 _VALID_ACTIVATION_HOOKS = {"apply", "forward"}
 _VALID_ACTIVATION_GROUPS = {"qkv", "o", "gate_up", "down", "other"}
@@ -52,6 +52,7 @@ _ROLLOUT_OPERAND_FORMATS = {
     "mxfp8_sim": ("mxfp8", "mxfp8"),
     "hif8_sim": ("hif8", "hif8"),
     "mxfp4_w4a8_sim": ("mxfp4", "mxfp8"),
+    "hif4_w4a8_sim": ("hif4", "hif8"),
 }
 
 
@@ -226,6 +227,8 @@ def should_quantize_source_weight(name: str, tensor: torch.Tensor) -> bool:
 def _qtype_name_for_format(sim_format: str) -> str:
     if sim_format == "mxfp4":
         return "mxfp4"
+    if sim_format == "hif4":
+        return "hifx4"
     if sim_format == "mxfp8":
         return "mxfp8e4m3"
     if sim_format == "hif8":

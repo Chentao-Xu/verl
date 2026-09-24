@@ -943,11 +943,12 @@ class vLLMHttpServer:
                 "mxfp8_sim",
                 "hif8_sim",
                 "mxfp4_w4a8_sim",
+                "hif4_w4a8_sim",
             ]
             if quantization not in _SUPPORTED_QUANTIZATION:
                 raise ValueError(f"Currently only support {_SUPPORTED_QUANTIZATION} quantization, got: {quantization}")
 
-            if quantization in {"mxfp8_sim", "hif8_sim", "mxfp4_w4a8_sim"}:
+            if quantization in {"mxfp8_sim", "hif8_sim", "mxfp4_w4a8_sim", "hif4_w4a8_sim"}:
                 if not is_torch_npu_available(check_device=False):
                     raise RuntimeError(f"{quantization} rollout is only available with torch_npu")
                 # Keep vLLM's model and GEMM in BF16. The worker extension

@@ -38,12 +38,23 @@ def test_mxfp4_w4a8_uses_split_operand_formats(monkeypatch):
     assert _qtype_name_for_format(get_low_precision_activation_format()) == "mxfp8e4m3"
 
 
+def test_hif4_w4a8_uses_split_operand_formats(monkeypatch):
+    monkeypatch.setenv("VERL_LOW_PRECISION_WEIGHT_FORMAT", "hif4")
+    monkeypatch.setenv("VERL_LOW_PRECISION_ACTIVATION_FORMAT", "hif8")
+
+    assert get_low_precision_weight_format() == "hif4"
+    assert get_low_precision_activation_format() == "hif8"
+    assert _qtype_name_for_format(get_low_precision_weight_format()) == "hifx4"
+    assert _qtype_name_for_format(get_low_precision_activation_format()) == "dhif8"
+
+
 @pytest.mark.parametrize(
     ("quantization", "expected"),
     [
         ("mxfp8_sim", ("mxfp8", "mxfp8")),
         ("hif8_sim", ("hif8", "hif8")),
         ("mxfp4_w4a8_sim", ("mxfp4", "mxfp8")),
+        ("hif4_w4a8_sim", ("hif4", "hif8")),
     ],
 )
 def test_rollout_operand_format_mapping(quantization, expected):

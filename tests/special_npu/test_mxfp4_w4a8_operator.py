@@ -8,7 +8,7 @@ from quant_cy_npu.QType import QType
 
 
 @pytest.mark.parametrize("shape", [(4, 32), (4, 37)])
-@pytest.mark.parametrize("qtype_name", ["mxfp4", "mxfp8e4m3"])
+@pytest.mark.parametrize("qtype_name", ["mxfp4", "mxfp8e4m3", "hifx4"])
 def test_mxfp4_w4a8_qdq_is_finite_deterministic_and_shape_preserving(shape, qtype_name):
     torch.manual_seed(42)
     source = torch.randn(shape, dtype=torch.bfloat16, device="npu")
