@@ -55,6 +55,7 @@ def test_hif4_w4a8_uses_split_operand_formats(monkeypatch):
         ("hif8_sim", ("hif8", "hif8")),
         ("mxfp4_w4a8_sim", ("mxfp4", "mxfp8")),
         ("hif4_w4a8_sim", ("hif4", "hif8")),
+        ("hif4_w4a4_sim", ("hif4", "hif4")),
     ],
 )
 def test_rollout_operand_format_mapping(quantization, expected):
