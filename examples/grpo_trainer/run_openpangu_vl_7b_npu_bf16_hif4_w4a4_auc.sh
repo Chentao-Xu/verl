@@ -57,6 +57,7 @@ bash "${SCRIPT_DIR}/run_openpangu_vl_7b_npu_mxfp8_sim.sh" \
     actor_rollout_ref.rollout.max_num_batched_tokens=32768 \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.60 \
     actor_rollout_ref.rollout.score_centering_topk=0 \
+    actor_rollout_ref.rollout.logprobs_mode=raw_logprobs \
     actor_rollout_ref.actor.policy_loss.loss_mode=auc \
     actor_rollout_ref.actor.policy_loss.auc_mismatch_loss=False \
     algorithm.rollout_correction.rollout_is=null \
