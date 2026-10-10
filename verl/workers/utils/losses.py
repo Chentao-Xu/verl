@@ -93,6 +93,8 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
+    if config.policy_loss.get("loss_mode", "vanilla") == "auc":
+        fields.extend(["auc_weights", "auc_pg_scale"])
     if "rollout_is_weights" in data:
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
@@ -109,7 +111,25 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     loss_mode = config.policy_loss.get("loss_mode", "vanilla")
 
-    if loss_mode == "score_centering":
+    if loss_mode == "auc":
+        if rollout_is_weights is not None or config.policy_loss.get("auc_mismatch_loss", False):
+            raise ValueError("AUC ablation forbids additional IS weights and mismatch loss")
+        if loss_agg_mode != "token-mean":
+            raise ValueError("AUC ablation requires token-mean")
+        policy_loss_fn = get_policy_loss_fn("vanilla")
+        pg_loss, pg_metrics = policy_loss_fn(
+            old_log_prob=old_log_prob,
+            log_prob=log_prob,
+            advantages=advantages * data["auc_weights"].detach(),
+            response_mask=response_mask,
+            loss_agg_mode=loss_agg_mode,
+            config=config,
+            rollout_is_weights=None,
+        )
+        scale = data["auc_pg_scale"].flatten()[0].detach()
+        pg_loss = pg_loss * scale
+        pg_metrics.update({"auc/pg_scale": scale.item(), "auc/mismatch_effective_coef": 0.0})
+    elif loss_mode == "score_centering":
         if rollout_is_weights is not None:
             raise ValueError("Standalone score centering must not be combined with TIS weights")
         pg_loss = agg_loss(

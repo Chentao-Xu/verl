@@ -129,6 +129,10 @@ class BaseEngine:
         if self.is_mp_src_rank_with_outputs():
             assert "grad_norm" not in outputs["metrics"]
             outputs["metrics"]["grad_norm"] = grad_norm
+            if "auc_weights" in data:
+                outputs["metrics"]["optimizer_step_succeeded"] = float(
+                    getattr(self, "last_optimizer_step_succeeded", False)
+                )
         return outputs
 
     def infer_batch(self, data: TensorDict, loss_function: Optional[Callable] = None) -> Any:

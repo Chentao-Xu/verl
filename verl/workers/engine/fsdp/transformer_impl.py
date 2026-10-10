@@ -757,6 +757,7 @@ class FSDPEngine(BaseEngine):
         if isinstance(grad_norm, DTensor):
             grad_norm = grad_norm.full_tensor()
 
+        self.last_optimizer_step_succeeded = False
         if scaler is not None:
             # scaler handles inf/nan skipping internally via _check_inf_per_device.
             scaler.step(self.optimizer)
@@ -768,6 +769,7 @@ class FSDPEngine(BaseEngine):
                 self.optimizer.zero_grad()
             else:
                 self.optimizer.step()
+                self.last_optimizer_step_succeeded = True
 
         if self._qat_enabled:
             from verl.utils.qat.core import invalidate_all_scales

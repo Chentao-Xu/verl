@@ -329,6 +329,12 @@ class RayPPOTrainer:
         self.tokenizer = tokenizer
         self.processor = processor
         self.config = config
+        self.auc_state = None
+        if config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla") == "auc":
+            from verl.trainer.ppo.auc_adapter import ExplorationTISState, validate_config
+
+            validate_config(config)
+            self.auc_state = ExplorationTISState.create()
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
         assert self.hybrid_engine, "Currently, only support hybrid engine"
@@ -1050,6 +1056,10 @@ class RayPPOTrainer:
         dataloader_local_path = os.path.join(local_global_step_folder, "data.pt")
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
+        if self.auc_state is not None:
+            from verl.trainer.ppo.auc_adapter import save_state
+
+            save_state(local_global_step_folder, self.auc_state, self.global_steps)
 
         # latest checkpointed iteration tracker (for atomic usage)
         if (
@@ -1099,6 +1109,10 @@ class RayPPOTrainer:
         print(f"Load from checkpoint folder: {global_step_folder}")
         # set global step
         self.global_steps = int(global_step_folder.split("global_step_")[-1])
+        if self.auc_state is not None:
+            from verl.trainer.ppo.auc_adapter import load_state
+
+            self.auc_state = load_state(global_step_folder, self.global_steps)
 
         print(f"Setting global step to {self.global_steps}")
         print(f"Resuming from {global_step_folder}")
@@ -1670,8 +1684,23 @@ class RayPPOTrainer:
                         self.checkpoint_manager.update_weights(self.global_steps)
                     else:
                         # update actor
+                        auc_result = None
+                        if self.auc_state is not None:
+                            from verl.trainer.ppo.auc_adapter import prepare
+
+                            with marked_timer("auc_prepare", timing_raw, color="blue"):
+                                auc_result = prepare(
+                                    batch.batch, self.auc_state, self.global_steps,
+                                    self.config.data.max_response_length,
+                                )
+                            metrics.update(auc_result.metrics)
                         with marked_timer("update_actor", timing_raw, color="red"):
                             actor_output = self._update_actor(batch)
+                        if auc_result is not None:
+                            from verl.trainer.ppo.auc_adapter import commit
+
+                            self.auc_state = commit(auc_result, actor_output.meta_info["metrics"])
+                            metrics["auc/state_committed_step"] = self.auc_state.source_step
 
                         # Check if the ESI (Elastic Server Instance)/training plan is close to expiration.
                         esi_close_to_expiration = should_save_ckpt_esi(

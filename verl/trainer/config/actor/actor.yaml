@@ -59,6 +59,8 @@ policy_loss:
 
   # Loss function mode: vanilla / clip-cov / kl-cov /gpg from https://arxiv.org/abs/2505.22617
   loss_mode: "vanilla"
+  # OpenPangu AUC ablation only: mismatch auxiliary loss is not enabled.
+  auc_mismatch_loss: false
 
   # Ratio of tokens to be clipped for clip-cov loss
   clip_cov_ratio: 0.0002
