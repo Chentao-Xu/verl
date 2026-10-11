@@ -330,11 +330,12 @@ class RayPPOTrainer:
         self.processor = processor
         self.config = config
         self.auc_state = None
-        if config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla") == "auc":
-            from verl.trainer.ppo.auc_adapter import ExplorationTISState, validate_config
-
-            validate_config(config)
-            self.auc_state = ExplorationTISState.create()
+        self.auc_sc_enabled = config.actor_rollout_ref.actor.policy_loss.get("loss_mode") == "auc_sc"
+        if config.actor_rollout_ref.actor.policy_loss.get("loss_mode", "vanilla") in ("auc", "auc_sc"):
+            from verl.trainer.ppo import auc_adapter, auc_sc_adapter
+            self.auc_adapter = auc_sc_adapter if self.auc_sc_enabled else auc_adapter
+            self.auc_adapter.validate_config(config)
+            self.auc_state = self.auc_adapter.ExplorationTISState.create()
 
         self.hybrid_engine = config.actor_rollout_ref.hybrid_engine
         assert self.hybrid_engine, "Currently, only support hybrid engine"
@@ -1057,7 +1058,7 @@ class RayPPOTrainer:
         dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_local_path)
         if self.auc_state is not None:
-            from verl.trainer.ppo.auc_adapter import save_state
+            save_state = self.auc_adapter.save_state
 
             save_state(local_global_step_folder, self.auc_state, self.global_steps)
 
@@ -1110,7 +1111,7 @@ class RayPPOTrainer:
         # set global step
         self.global_steps = int(global_step_folder.split("global_step_")[-1])
         if self.auc_state is not None:
-            from verl.trainer.ppo.auc_adapter import load_state
+            load_state = self.auc_adapter.load_state
 
             self.auc_state = load_state(global_step_folder, self.global_steps)
 
@@ -1306,6 +1307,7 @@ class RayPPOTrainer:
             batch_td,
             calculate_entropy=True,
             calculate_sum_pi_squared=calculate_sum_pi_squared,
+            auc_sc_enabled=self.auc_sc_enabled,
             compute_loss=False,
         )
         output = self.actor_rollout_wg.compute_log_prob(batch_td)
@@ -1323,6 +1325,8 @@ class RayPPOTrainer:
             sum_pi_squared = no_padding_2_padding(sum_pi_squared, batch_td)
         # step 5: rebuild a tensordict and convert to dataproto
         result = {"old_log_probs": log_probs.float(), "entropys": entropy.float()}
+        if self.auc_sc_enabled:
+            result["old_policy_head_log_probs"] = no_padding_2_padding(tu.get(output, "auc_sc_head"), batch_td).float().detach()
         if routed_experts is not None:
             result["routed_experts"] = routed_experts
         if sum_pi_squared is not None:
@@ -1333,6 +1337,7 @@ class RayPPOTrainer:
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
+        batch.meta_info["auc_sc_enabled"] = self.auc_sc_enabled
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
         # TODO: Make "temperature" single source of truth from generation.
         batch.meta_info["temperature"] = rollout_config.temperature
@@ -1686,7 +1691,7 @@ class RayPPOTrainer:
                         # update actor
                         auc_result = None
                         if self.auc_state is not None:
-                            from verl.trainer.ppo.auc_adapter import prepare
+                            prepare = self.auc_adapter.prepare
 
                             with marked_timer("auc_prepare", timing_raw, color="blue"):
                                 auc_result = prepare(
@@ -1697,7 +1702,7 @@ class RayPPOTrainer:
                         with marked_timer("update_actor", timing_raw, color="red"):
                             actor_output = self._update_actor(batch)
                         if auc_result is not None:
-                            from verl.trainer.ppo.auc_adapter import commit
+                            commit = self.auc_adapter.commit
 
                             self.auc_state = commit(auc_result, actor_output.meta_info["metrics"])
                             metrics["auc/state_committed_step"] = self.auc_state.source_step

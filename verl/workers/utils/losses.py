@@ -66,6 +66,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         sampler_head_mass = masked_mean(
             data["score_centering_logprobs"].float().exp().sum(-1), data["response_mask"].bool()
         )
+    auc_sc_data = None
+    auc_sc_head = None
+    if config.policy_loss.get("loss_mode") == "auc_sc":
+        auc_sc_data = data
+        auc_sc_head = no_padding_2_padding(model_output["auc_sc_head"], data)
     entropy = model_output.get("entropy", None)
     if entropy is not None:
         entropy = no_padding_2_padding(entropy, data)
@@ -111,7 +116,14 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     loss_mode = config.policy_loss.get("loss_mode", "vanilla")
 
-    if loss_mode == "auc":
+    if loss_mode == "auc_sc":
+        from verl.workers.utils.auc_sc import combined_loss
+        if rollout_is_weights is not None or config.policy_loss.auc_mismatch_loss:
+            raise ValueError("AUC+SC forbids additional IS/mismatch auxiliary loss")
+        pg_loss, pg_metrics, ppo_component, sc_component = combined_loss(config, log_prob, auc_sc_head, auc_sc_data)
+        metrics["actor/ppo_loss"] = Metric(value=ppo_component, aggregation=metric_aggregation)
+        metrics["actor/sc_correction_loss"] = Metric(value=sc_component, aggregation=metric_aggregation)
+    elif loss_mode == "auc":
         if rollout_is_weights is not None or config.policy_loss.get("auc_mismatch_loss", False):
             raise ValueError("AUC ablation forbids additional IS weights and mismatch loss")
         if loss_agg_mode != "token-mean":

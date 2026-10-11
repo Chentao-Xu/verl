@@ -1146,7 +1146,8 @@ class FSDPEngineWithLMHead(FSDPEngine):
             data=micro_batch, key="calculate_sum_pi_squared", default=False
         )
         distillation_use_topk = tu.get_non_tensor_data(data=micro_batch, key="distillation_use_topk", default=False)
-        score_centering_enabled = logits_processor_func is not None and "score_centering_ids" in micro_batch
+        auc_sc_enabled = tu.get_non_tensor_data(micro_batch, "auc_sc_enabled", False)
+        score_centering_enabled = (logits_processor_func is not None or auc_sc_enabled) and "score_centering_ids" in micro_batch
         if score_centering_enabled and (use_fused_kernels or self.use_ulysses_sp):
             raise NotImplementedError("Score centering currently requires FSDP logits without SP/fused kernels")
 
@@ -1197,7 +1198,10 @@ class FSDPEngineWithLMHead(FSDPEngine):
                     inplace_backward=inplace_backward,
                 )
 
-                if score_centering_enabled:
+                if auc_sc_enabled:
+                    from verl.workers.utils.auc_sc import head_for_response_logits
+                    model_output["auc_sc_head"] = head_for_response_logits(logits_rmpad, micro_batch)
+                elif score_centering_enabled:
                     from verl.workers.utils.score_centering import correction_for_response_logits
 
                     correction_full, _, _ = correction_for_response_logits(
@@ -1310,7 +1314,10 @@ class FSDPEngineWithLMHead(FSDPEngine):
                         inplace_backward=not score_centering_enabled,
                     )
 
-                    if score_centering_enabled:
+                    if auc_sc_enabled:
+                        from verl.workers.utils.auc_sc import head_for_response_logits
+                        model_output["auc_sc_head"] = head_for_response_logits(logits_rmpad, micro_batch)
+                    elif score_centering_enabled:
                         from verl.workers.utils.score_centering import correction_for_response_logits
 
                         correction_full, _, _ = correction_for_response_logits(
